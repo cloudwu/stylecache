@@ -15,6 +15,7 @@
 #define HASH_SIZE 128
 #define HASH_MAXSTEP 5
 #define MAX_KEY 128
+#define DELAY_REMOVE 4096
 
 struct attrib_blob {
 	size_t sz;
@@ -84,15 +85,158 @@ struct attrib_tuple_lookup {
 	struct attrib_tuple_hash_entry *e;
 };
 
+#define INHERIT_ID_MAX (1<<20)
+#define INHERIT_CACHE_SIZE 8191
+#define INHERIT_MAX_COUNT ((1<<12)-1)
+
+// 64bits
+struct inherit_entry {
+	uint64_t a : 20;
+	uint64_t b : 20;
+	uint64_t result : 20;
+	uint64_t withmask : 1;
+	uint64_t valid : 1;
+};
+
+struct inherit_key {
+	uint32_t key : 20;
+	uint32_t count : 11;
+	uint32_t valid : 1;
+};
+
+struct inherit_cache {
+	struct inherit_entry s[INHERIT_CACHE_SIZE];
+	struct inherit_key key[INHERIT_CACHE_SIZE];
+};
+
 struct attrib_state {
 	struct attrib_arena arena;
 	struct attrib_lookup arena_l;
 	struct attrib_tuple tuple;
 	struct attrib_tuple_lookup tuple_l;
+	struct inherit_cache icache;
+	int remove_head;
+	int remove_tail;
+	int removed[DELAY_REMOVE];
 	unsigned char inherit_mask[128];
 	int kv_used;
 	int kv_n;
 };
+
+static void
+inherit_cache_init(struct inherit_cache *c) {
+	memset(c, 0, sizeof(*c));
+}
+
+static inline int
+hash_inherit_key(int a) {
+	uint32_t v = (uint32_t)a;
+	return (v * 0xdeece66d + 0xb) % INHERIT_CACHE_SIZE;
+}
+
+static inline int
+inherit_cache_key_valid(struct inherit_cache *c, int a) {
+	if (a >= INHERIT_ID_MAX)
+		return 0;
+	struct inherit_key *k = &c->key[hash_inherit_key(a)];
+	if (k->key != a)
+		return 0;
+	if (k->count == 0 || !k->valid)
+		return 0;
+
+	return 1;
+}
+
+static int
+inherit_cache_fetch(struct inherit_cache *c, int a, int b, int withmask) {
+	if (!inherit_cache_key_valid(c, a) || !inherit_cache_key_valid(c, a))
+		return -1;
+	uint32_t v = (a & 0xffff) | ((b & 0xffff) << 16);
+	v = v * 0xdeece66d + 0xb;
+	v %= INHERIT_CACHE_SIZE;
+	struct inherit_entry *e = &c->s[v];
+	if (e->valid && e->a == a && e->b == b && e->withmask == withmask)
+		return e->result;
+	return -1;
+}
+
+static inline void
+unset_key(struct inherit_cache *c, int a) {
+	struct inherit_key *k = &c->key[hash_inherit_key(a)];
+	assert(k->key == a && k->count >0);
+	--k->count;
+}
+
+static inline int
+set_key(struct inherit_cache *c, int key) {
+	struct inherit_key *k = &c->key[hash_inherit_key(key)];
+	if (!k->valid) {
+		if (k->count > 0) {
+			// clear entries with key
+			int i;
+			for (i=0;i<INHERIT_CACHE_SIZE;i++) {
+				struct inherit_entry *e = &c->s[i];
+				if (e->valid && (e->a == key || e->b == key || e->result == key)) {
+					e->valid = 0;
+					unset_key(c, e->a);
+					unset_key(c, e->b);
+					unset_key(c, e->result);
+				}
+			}
+		}
+		k->key = key;
+		k->count = 1;
+		k->valid = 1;
+		return 1;	// succ
+	} else {
+		if (k->key != key)
+			return 0;	// fail
+		if (k->count >= INHERIT_MAX_COUNT)
+			return 0;	// too many, fail
+		++k->count;
+		return 1;
+	}
+}
+
+static inline void
+inherit_cache_retirekey(struct inherit_cache *c, int key) {
+	struct inherit_key *k = &c->key[hash_inherit_key(key)];
+	if (k->key == key) {
+		k->valid = 0;
+	}
+}
+
+static void
+inherit_cache_set(struct inherit_cache *c, int a, int b, int withmask, int result) {
+	uint32_t v = (a & 0xffff) | ((b & 0xffff) << 16);
+	v = v * 0xdeece66d + 0xb;
+	v %= INHERIT_CACHE_SIZE;
+	struct inherit_entry *e = &c->s[v];
+	if (e->valid) {
+		unset_key(c, e->a);
+		unset_key(c, e->b);
+		unset_key(c, e->result);
+		e->valid = 0;
+	}
+	e->a = a;
+	e->b = b;
+	e->result = result;
+	e->withmask = withmask;
+
+	if (!set_key(c, a))
+		return;
+
+	if (!set_key(c, b)) {
+		unset_key(c, a);
+		return;
+	}
+
+	if (!set_key(c, result)) {
+		unset_key(c, a);
+		unset_key(c, b);
+		return;
+	}
+}
 
 static size_t
 arena_size(struct attrib_arena *arena) {
@@ -267,7 +411,6 @@ arena_create(struct attrib_arena *arena, int key, void *value, size_t sz, uint32
 	} else {
 		kv->blob = 0;
 		kv->v.ptr = NULL;
-		printf("COPY %s %d\n", (const char *)value, (int)sz);
 		memcpy(kv->v.buffer, value, sz);
 	}
 	return index;
@@ -601,7 +744,10 @@ attrib_newstate(const unsigned char *inherit_mask) {
 	hash_init(&A->arena_l);
 	tuple_init(&A->tuple);
 	tuple_hash_init(&A->tuple_l);
+	inherit_cache_init(&A->icache);
 
+	A->remove_head = 0;
+	A->remove_tail = 0;
 	A->kv_used = 0;
 	A->kv_n = 0;
 
@@ -744,6 +890,35 @@ attrib_create(struct attrib_state *A, int n, const int e[]) {
 	return ret;
 }
 
+static void
+delete_tuple(struct attrib_state *A, int index) {
+	struct attrib_array * a = A->tuple.s[index].a;
+	if (a->refcount > 0) {
+		// realive
+		return;
+	}
+	int i;
+	for (i=0;i<a->n;i++) {
+		if (arena_release(&A->arena, a->data[i]) == 0) {
+			A->kv_used--;
+		}
+	}
+	tuple_hash_remove(&A->tuple_l, a->hash, index);
+	tuple_delete(&A->tuple, index);
+
+	inherit_cache_retirekey(&A->icache, index);
+}
+
+static int
+pop_removed(struct attrib_state *A) {
+	assert(A->remove_head != A->remove_tail);
+	int r = A->removed[A->remove_head];
+	int head = A->remove_head + 1;
+	if (head >= DELAY_REMOVE)
+		head -= DELAY_REMOVE;
+	return r;
+}
+
 int
 attrib_release(struct attrib_state *A, attrib_t handle) {
 	int index = handle.idx;
@@ -751,14 +926,16 @@ attrib_release(struct attrib_state *A, attrib_t handle) {
 	struct attrib_array * a = A->tuple.s[index].a;
 	--a->refcount;
 	if (a->refcount == 0) {
-		int i;
-		for (i=0;i<a->n;i++) {
-			if (arena_release(&A->arena, a->data[i]) == 0) {
-				A->kv_used--;
-			}
+		int tail = A->remove_tail + 1;
+		if (tail >= DELAY_REMOVE)
+			tail -= DELAY_REMOVE;
+		if (tail == A->remove_head) {
+			// full
+			delete_tuple(A, pop_removed(A));
 		}
-		tuple_hash_remove(&A->tuple_l, a->hash, index);
-		tuple_delete(&A->tuple, index);
+		// push index, delay delete
+		A->removed[tail] = index;
+		A->remove_tail = tail;
 	}
 	return a->refcount;
 }
@@ -816,8 +993,8 @@ attrib_index(struct attrib_state *A, attrib_t handle, int i, uint8_t *key) {
 	return kv->blob ? kv->v.ptr->data : kv->v.buffer;
 }
 
-attrib_t
-attrib_inherit(struct attrib_state *A, attrib_t child, attrib_t parent, int with_mask) {
+static attrib_t
+attrib_inherit_(struct attrib_state *A, attrib_t child, attrib_t parent, int with_mask) {
 	struct attrib_array *child_a = get_array(A, child);
 	struct attrib_array *parent_a = get_array(A, parent);
 	int output[MAX_KEY];
@@ -913,6 +1090,20 @@ attrib_inherit(struct attrib_state *A, attrib_t child, attrib_t parent, int with
 	}
 }
 
+attrib_t
+attrib_inherit(struct attrib_state *A, attrib_t child, attrib_t parent, int withmask) {
+	// check cache
+	int result = inherit_cache_fetch(&A->icache, child.idx, parent.idx, withmask);
+	if (result >= 0) {
+		attrib_t r = { result };
+		addref(A, r);
+		return r;
+	}
+	attrib_t r = attrib_inherit_(A, child, parent, withmask);
+	inherit_cache_set(&A->icache, child.idx, parent.idx, withmask, r.idx);
+	return r;
+}
+
 int
 attrib_refcount(struct attrib_state *A, attrib_t attr) {
 	int index = attr.idx;
@@ -929,12 +1120,13 @@ attrib_refcount(struct attrib_state *A, attrib_t attr) {
 static void
 dump_attrib(struct attrib_state *A, attrib_t handle) {
 	int i;
+	printf("[ATTRIB %x (%d)]\n", handle.idx, attrib_refcount(A, handle));
 	for (i=0;;i++) {
-		int key;
+		uint8_t key;
 		void *ptr = attrib_index(A, handle, i, &key);
 		if (ptr == NULL)
 			break;
-		printf("[%d] = %s\n", key, (const char *)ptr);
+		printf("\t[%d] = %s\n", key, (const char *)ptr);
 	}
 }
 
@@ -970,9 +1162,17 @@ main() {
 	printf("mem = %d\n", (int)attrib_memsize(A));
 
 	attrib_t handle4 = attrib_inherit(A, handle, handle2, 0);
+	attrib_release(A, handle);
+	attrib_release(A, handle2);
 	dump_attrib(A, handle4);
 
 	attrib_release(A, handle4);
+
+	dump_attrib(A, handle4);
+
+	handle4 = attrib_inherit(A, handle4, handle4, 0);
+
+	dump_attrib(A, handle4);
 
 	attrib_close(A);
 	return 0;
