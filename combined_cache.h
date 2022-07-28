@@ -156,7 +156,8 @@ cache_find_(struct combined_cache *c, uint64_t id) {
 		v >>= COMBINE_CACHE_BITS;
 	}
 
-	while ((n=next_node_(c, n))) {
+	for (i=0;i<COMBINE_CACHE_SIZE;i++) {
+		struct combined_node *n = &c->queue[i];
 		if (n->id == id)
 			return n;
 	}
@@ -204,7 +205,7 @@ combined_cache_find(struct combined_cache *c, uint64_t id) {
 	return n;
 }
 
-static void
+static int
 remove_index_(uint64_t queue[COMBINE_CACHE_HASH_SIZE], int index, int slot) {
 	uint64_t v = queue[index];
 	uint64_t nv = 0;
@@ -224,21 +225,40 @@ remove_index_(uint64_t queue[COMBINE_CACHE_HASH_SIZE], int index, int slot) {
 	if (dirty) {
 		queue[index] = nv;
 	}
-}
-
-static void
-remove_node_index_(struct combined_cache *c, int slot) {
-	struct combined_node *node = &c->queue[slot];
-	int h = cache_hash_combined_(node->a, node->b);
-	remove_index_(c->combined_index, h, slot);
-	h = cache_hash_id_(node->id);
-	remove_index_(c->id_index, h, slot);
+	return (i == COMBINE_CACHE_HASH_C && dirty);
 }
 
 static inline void
 add_node_index_(uint64_t queue[COMBINE_CACHE_HASH_SIZE], int index, int slot) {
 	queue[index] = queue[index] << COMBINE_CACHE_HASH_C | (slot + 1);
 }
+
+static void
+remove_node_index_(struct combined_cache *c, int slot) {
+	struct combined_node *node = &c->queue[slot];
+	int h = cache_hash_combined_(node->a, node->b);
+	int i;
+	if (remove_index_(c->combined_index, h, slot)) {
+		c->combined_index[h] = 0;
+		for (i=0;i<COMBINE_CACHE_SIZE;i++) {
+			struct combined_node *n = &c->queue[i];
+			if (n->id && h == cache_hash_combined_(node->a, node->b)) {
+				add_node_index_(c->combined_index, h, slot);
+			}
+		}
+	}
+	h = cache_hash_id_(node->id);
+	if (remove_index_(c->id_index, h, slot)) {
+		c->id_index[h] = 0;
+		for (i=0;i<COMBINE_CACHE_SIZE;i++) {
+			struct combined_node *n = &c->queue[i];
+			if (n->id && h == cache_hash_id_(node->id)) {
+				add_node_index_(c->id_index, h, slot);
+			}
+		}
+	}
+}
+
 
 static void
 make_node_index_(struct combined_cache *c, int slot) {
@@ -263,8 +283,9 @@ combined_cache_new(struct combined_cache *c, uint64_t a, uint64_t b, int mask, u
 	uint64_t id = *idbase + 1;
 
 	int slot = c->tail;
-	remove_node_index_(c, slot);
 	node = &c->queue[slot];
+	node->id = 0;
+	remove_node_index_(c, slot);
 	if (node->value) {
 		attrib_release(A, node->data);
 	}

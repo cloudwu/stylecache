@@ -702,6 +702,11 @@ addref(struct attrib_state *A, attrib_t handle) {
 }
 
 attrib_t
+attrib_addref(struct attrib_state *A, attrib_t handle) {
+	return addref(A, handle);
+}
+
+attrib_t
 attrib_create(struct attrib_state *A, int n, const int e[]) {
 	int tmp[MAX_KEY];
 	int i;
@@ -771,7 +776,7 @@ get_kv(struct attrib_state *A, struct attrib_array * a, int index) {
 }
 
 int
-attrib_find(struct attrib_state *A, attrib_t handle, int key) {
+attrib_find(struct attrib_state *A, attrib_t handle, uint8_t key) {
 	int index = handle.idx;
 	assert(index >= 0 && index < A->tuple.n);
 	struct attrib_array * a = A->tuple.s[index].a;
@@ -792,7 +797,7 @@ attrib_find(struct attrib_state *A, attrib_t handle, int key) {
 }
 
 void*
-attrib_index(struct attrib_state *A, attrib_t handle, int i, int *key) {
+attrib_index(struct attrib_state *A, attrib_t handle, int i, uint8_t *key) {
 	int index = handle.idx;
 	assert(index >= 0 && index < A->tuple.n);
 	struct attrib_array * a = A->tuple.s[index].a;

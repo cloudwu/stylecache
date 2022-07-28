@@ -307,6 +307,17 @@ eval_(struct style_cache *C, uint64_t handle) {
 	return result.idx;
 }
 
+style_handle_t
+style_clone(struct style_cache *C, style_handle_t s) {
+	if (s.idx == 0)
+		return STYLE_NULL;
+	int a = eval_(C, s.idx);
+	if (a < 0)
+		return STYLE_NULL;
+	attrib_t attr = {a};
+	return style_handle_from_attr(C, attrib_addref(C->A, attr));
+}
+
 static void
 reset_dirty(struct style_arena *A) {
 	int i;
@@ -330,7 +341,7 @@ check_handle_dirty(struct style_cache *C, uint64_t handle) {
 		if (node == NULL) {
 			return 1;
 		}
-		return 	check_node_dirty(C, node);
+		return check_node_dirty(C, node);
 	}
 }
 
@@ -376,7 +387,7 @@ style_eval(struct style_cache *C, style_handle_t handle) {
 }
 
 void*
-style_find(struct style_cache *C, int attrib_id, int key) {
+style_find(struct style_cache *C, int attrib_id, uint8_t key) {
 	attrib_t a = { attrib_id };
 	int index = attrib_find(C->A, a, key);
 	if (index < 0)
@@ -385,7 +396,7 @@ style_find(struct style_cache *C, int attrib_id, int key) {
 }
 
 void*
-style_index(struct style_cache *C, int attrib_id, int i, int *key) {
+style_index(struct style_cache *C, int attrib_id, int i, uint8_t *key) {
 	attrib_t a = { attrib_id };
 	return attrib_index(C->A, a, i, key);
 }
@@ -418,7 +429,7 @@ print_handle(struct style_cache *C, style_handle_t handle) {
 
 	int i;
 	for (i=0;;i++) {
-		int key;
+		uint8_t key;
 		void* v = style_index(C, attrib, i, &key);
 		if (v) {
 			printf("\tKey = %d , Value = %s\n", key, (const char *)v);
@@ -470,7 +481,11 @@ main() {
 
 	style_flush(C);
 
+	h3 = style_clone(C, h3);
+
 	print_handle(C, h3);
+
+	style_dump(C);
 
 	style_deletecache(C);
 
