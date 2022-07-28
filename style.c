@@ -88,11 +88,10 @@ style_arena_memsize(struct style_arena *arena) {
 struct style_cache *
 style_newcache(const unsigned char inherit_mask[128]) {
 	struct style_cache * c = (struct style_cache *)malloc(sizeof(*c));
-	memcpy(c->mask, inherit_mask, 128);
 	c->lastid = 0;
 	style_arena_init(&c->arena, ARENA_DEFAULT_SIZE);
 	combined_cache_init(&c->cache);
-	c->A = attrib_newstate();
+	c->A = attrib_newstate(inherit_mask);
 	return c;
 }
 
@@ -300,8 +299,7 @@ eval_(struct style_cache *C, uint64_t handle) {
 	attrib_t child = { child_id };
 	attrib_t parent = { parent_id };
 
-	const unsigned char * mask = node->mask ? C->mask : NULL;
-	attrib_t result = attrib_inherit(C->A, child, parent, mask);
+	attrib_t result = attrib_inherit(C->A, child, parent, node->mask);
 	node->value = 1;
 	node->data = result;
 	return result.idx;

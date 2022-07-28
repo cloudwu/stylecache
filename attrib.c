@@ -89,6 +89,7 @@ struct attrib_state {
 	struct attrib_lookup arena_l;
 	struct attrib_tuple tuple;
 	struct attrib_tuple_lookup tuple_l;
+	unsigned char inherit_mask[128];
 	int kv_used;
 	int kv_n;
 };
@@ -594,7 +595,7 @@ array_hash(int *v, int n) {
 }
 
 struct attrib_state *
-attrib_newstate() {
+attrib_newstate(const unsigned char *inherit_mask) {
 	struct attrib_state *A = (struct attrib_state *)malloc(sizeof(*A));
 	arena_init(&A->arena);
 	hash_init(&A->arena_l);
@@ -603,6 +604,12 @@ attrib_newstate() {
 
 	A->kv_used = 0;
 	A->kv_n = 0;
+
+	if (inherit_mask == NULL) {
+		memset(A->inherit_mask,1,sizeof(A->inherit_mask));
+	} else {
+		memcpy(A->inherit_mask, inherit_mask, sizeof(A->inherit_mask));
+	}
 
 	return A;
 }
@@ -737,7 +744,7 @@ attrib_create(struct attrib_state *A, int n, const int e[]) {
 	return ret;
 }
 
-void
+int
 attrib_release(struct attrib_state *A, attrib_t handle) {
 	int index = handle.idx;
 	assert(index >= 0 && index < A->tuple.n);
@@ -753,6 +760,7 @@ attrib_release(struct attrib_state *A, attrib_t handle) {
 		tuple_hash_remove(&A->tuple_l, a->hash, index);
 		tuple_delete(&A->tuple, index);
 	}
+	return a->refcount;
 }
 
 static inline struct attrib_array *
@@ -809,15 +817,16 @@ attrib_index(struct attrib_state *A, attrib_t handle, int i, uint8_t *key) {
 }
 
 attrib_t
-attrib_inherit(struct attrib_state *A, attrib_t child, attrib_t parent, const unsigned char * inherit_mask) {
+attrib_inherit(struct attrib_state *A, attrib_t child, attrib_t parent, int with_mask) {
 	struct attrib_array *child_a = get_array(A, child);
 	struct attrib_array *parent_a = get_array(A, parent);
 	int output[MAX_KEY];
 	int output_index = 0;
 	int dirty = 0;
+	const unsigned char * inherit_mask = A->inherit_mask;
 	if (child_a->n == 0) {
 		// child is empty
-		if (inherit_mask) {
+		if (with_mask) {
 			int i;
 			for (i=0;i<parent_a->n;i++) {
 				struct attrib_kv *kv = get_kv(A, parent_a, i);
@@ -849,7 +858,7 @@ attrib_inherit(struct attrib_state *A, attrib_t child, attrib_t parent, const un
 		}
 		if (child_index >= child_a->n) {
 			int n = parent_a->n - parent_index;
-			if (inherit_mask) {
+			if (with_mask) {
 				int i;
 				for (i=0;i<n;i++) {
 					struct attrib_kv *kv = get_kv(A, parent_a, parent_index+i);
@@ -884,7 +893,7 @@ attrib_inherit(struct attrib_state *A, attrib_t child, attrib_t parent, const un
 			output[output_index++] = child_v;
 		} else {
 			// use parent
-			if (inherit_mask) {
+			if (with_mask) {
 				if (inherit_mask[parent_k]) {
 					output[output_index++] = parent_v;
 					dirty = 1;
@@ -931,7 +940,7 @@ dump_attrib(struct attrib_state *A, attrib_t handle) {
 
 int
 main() {
-	struct attrib_state *A = attrib_newstate();
+	struct attrib_state *A = attrib_newstate(NULL);
 	int id1 = KV(A, 1, "hello");
 	int id2 = KV(A, 2, "hello world");
 	int id3 = KV(A, 2, "hello");
@@ -960,7 +969,7 @@ main() {
 
 	printf("mem = %d\n", (int)attrib_memsize(A));
 
-	attrib_t handle4 = attrib_inherit(A, handle, handle2, NULL);
+	attrib_t handle4 = attrib_inherit(A, handle, handle2, 0);
 	dump_attrib(A, handle4);
 
 	attrib_release(A, handle4);
