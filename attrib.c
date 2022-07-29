@@ -829,7 +829,8 @@ kv_collect(struct attrib_state *A) {
 }
 
 
-static void
+// add index(kv) into buffer[n]
+static int
 add_kv(struct attrib_state *A, int buffer[MAX_KEY], int n, int index) {
 	struct attrib_kv *kv = &A->arena.e[index];
 	int key = kv->k;
@@ -837,15 +838,21 @@ add_kv(struct attrib_state *A, int buffer[MAX_KEY], int n, int index) {
 	for (i=n-1;i>=0;i--) {
 		int bk = A->arena.e[buffer[i]].k;
 		if (key >= bk) {
-			assert(key > bk);
-			// insert index after [i]
-			memmove(buffer+i+2, buffer+i+1,(n-i-1) * sizeof(int));
-			buffer[i+1] = index;
-			return;
+			if (key > bk) {
+				// insert index after [i]
+				memmove(buffer+i+2, buffer+i+1,(n-i-1) * sizeof(int));
+				buffer[i+1] = index;
+				return 1;
+			} else {
+				// duplicate key
+				buffer[i] = index;
+				return 0;
+			}
 		}
 	}
 	memmove(buffer+1, buffer,n * sizeof(int));
-	buffer[0] = index;	
+	buffer[0] = index;
+	return 1;
 }
 
 static inline attrib_t
@@ -863,12 +870,19 @@ attrib_t
 attrib_create(struct attrib_state *A, int n, const int e[]) {
 	int tmp[MAX_KEY];
 	int i;
-	for (i=0;i<n;i++) {
-		add_kv(A, tmp, i, e[i]);
+	if (n > 0) {
+		tmp[0] = e[0];
+		int index = 1;
+		for (i=1;i<n;i++) {
+			if (add_kv(A, tmp, index, e[i])) {
+				++index;
+			}
+		}
+		n = index;
 	}
 	uint32_t hash = array_hash(tmp, n);
 
-	int index = tuple_hash_find(A, hash, n, e);
+	int index = tuple_hash_find(A, hash, n, tmp);
 	if (index >= 0) {
 		attrib_t ret = { index };
 		return addref(A, ret);
@@ -1143,9 +1157,9 @@ main() {
 	assert(id2 == id5);
 	assert(id1 != id3);
 
-	int tuple[] = { id2, id1 };
+	int tuple[] = { id2, id3, id1 };
 
-	attrib_t handle = attrib_create(A, 2, tuple);
+	attrib_t handle = attrib_create(A, 3, tuple);
 
 	int tmp[128];
 	int n = attrib_get(A, handle, tmp);
