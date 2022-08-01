@@ -32,6 +32,12 @@ struct combined_cache {
 	uint64_t combined_index[COMBINE_CACHE_HASH_SIZE];
 };
 
+static inline struct combined_node *
+get_node(struct combined_cache *c, int index) {
+	assert(index >= 0);
+	return &c->queue[index];
+}
+
 static inline uint32_t
 make_list_(int prev, int next) {
 	uint16_t n[2] = {
@@ -176,13 +182,13 @@ cache_touch_(struct combined_cache *c, struct combined_node *node) {
 	if (slot == c->tail) {
 		int tail = prev_list_(node->list);
 		c->tail = tail;
-		struct combined_node * tail_node = &c->queue[tail];
+		struct combined_node * tail_node = get_node(c, tail);
 		set_next_(tail_node, -1);
 	} else {
 		int prev = prev_list_(node->list);
 		int next = next_list_(node->list);
-		struct combined_node * prev_node = &c->queue[prev];
-		struct combined_node * next_node = &c->queue[next];
+		struct combined_node * prev_node = get_node(c, prev);
+		struct combined_node * next_node = get_node(c, next);
 		set_next_(prev_node, next);
 		set_prev_(next_node, prev);
 	}
@@ -235,7 +241,7 @@ add_node_index_(uint64_t queue[COMBINE_CACHE_HASH_SIZE], int index, int slot) {
 
 static void
 remove_node_index_(struct combined_cache *c, int slot) {
-	struct combined_node *node = &c->queue[slot];
+	struct combined_node *node = get_node(c, slot);
 	int h = cache_hash_combined_(node->a, node->b);
 	int i;
 	if (remove_index_(c->combined_index, h, slot)) {
@@ -262,7 +268,7 @@ remove_node_index_(struct combined_cache *c, int slot) {
 
 static void
 make_node_index_(struct combined_cache *c, int slot) {
-	struct combined_node *node = &c->queue[slot];
+	struct combined_node *node = get_node(c, slot);
 	int h = cache_hash_combined_(node->a, node->b);
 	add_node_index_(c->combined_index, h, slot);
 	h = cache_hash_id_(node->id);
@@ -282,6 +288,8 @@ combined_cache_new(struct combined_cache *c, uint64_t a, uint64_t b, int mask, u
 
 	uint64_t id = *idbase + 1;
 
+	// remove tail
+
 	int slot = c->tail;
 	node = &c->queue[slot];
 	node->id = 0;
@@ -291,8 +299,11 @@ combined_cache_new(struct combined_cache *c, uint64_t a, uint64_t b, int mask, u
 	}
 
 	int prev = prev_list_(node->list);
-	struct combined_node *tail_node = &c->queue[prev];
+	struct combined_node *tail_node = get_node(c, prev);
 	set_next_(tail_node, -1);
+	c->tail = prev;
+
+	// reuse old tail slot
 	
 	node->id = id;
 	node->a = a;
@@ -302,7 +313,9 @@ combined_cache_new(struct combined_cache *c, uint64_t a, uint64_t b, int mask, u
 
 	node->list = make_list_(-1, c->head);
 
-	struct combined_node *head_node = &c->queue[c->head];
+	// put it (slot) to head
+
+	struct combined_node *head_node = get_node(c, c->head);
 	set_prev_(head_node, slot);
 	c->head = slot;
 
