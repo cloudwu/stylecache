@@ -1062,8 +1062,8 @@ attrib_inherit_(struct attrib_state *A, attrib_t child, attrib_t parent, int wit
 				dirty = 1;
 				memcpy(output+output_index, parent_a->data+parent_index, n * sizeof(int));
 				output_index += n;
-				break;
 			}
+			break;
 		}
 		int child_v = child_a->data[child_index];
 		int parent_v = parent_a->data[parent_index];
