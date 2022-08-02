@@ -19,7 +19,7 @@ size_t style_memsize(struct style_cache *);
 void style_dump(struct style_cache *);	// for debug
 
 style_handle_t style_create(struct style_cache *, int n, struct style_attrib a[]);
-void style_modify(struct style_cache *, style_handle_t s, int n, struct style_attrib a[]);	// data == NULL means remove attrib
+int style_modify(struct style_cache *, style_handle_t s, int n, struct style_attrib a[]);	// data == NULL means remove attrib, return 0 means not changed
 style_handle_t style_clone(struct style_cache *, style_handle_t s);
 void style_release(struct style_cache *c, style_handle_t s);
 

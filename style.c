@@ -215,7 +215,7 @@ add_dirty(struct style_arena *arena, int index) {
 	arena->dirty[n] = index;
 }
 
-void
+int
 style_modify(struct style_cache *C, style_handle_t s, int patch_n, struct style_attrib patch[]) {
 	struct attrib_state *A = C->A;
 	int index = find_by_id(C, s.idx);
@@ -225,6 +225,7 @@ style_modify(struct style_cache *C, style_handle_t s, int patch_n, struct style_
 	int n = attrib_get(A, d->data, tmp);
 	int i;
 	int removed = 0;
+	int change = 0;
 	for (i=0;i<patch_n;i++) {
 		int index = attrib_find(A, d->data, patch[i].key);
 		if (index < 0) {
@@ -233,19 +234,27 @@ style_modify(struct style_cache *C, style_handle_t s, int patch_n, struct style_
 				int kv = attrib_entryid(A, patch[i].key, patch[i].data, patch[i].sz);
 				tmp[n++] = kv;
 				assert(n <= MAX_KEY);
+				change = 1;
 			}
 		} else {
 			if (patch[i].data) {
 				// replace
 				int kv = attrib_entryid(A, patch[i].key, patch[i].data, patch[i].sz);
-				tmp[index] = kv;
+				if (tmp[index] != kv) {
+					change = 1;
+					tmp[index] = kv;
+				}
 			} else {
 				// remove
 				++removed;
 				tmp[index] = -1;
+				change = 1;
 			}
 		}
 	}
+	if (!change)
+		return 0;
+
 	int i2 = 0;
 	int n2 = n;
 	for (i=0;i<n && removed;i++) {
@@ -262,6 +271,7 @@ style_modify(struct style_cache *C, style_handle_t s, int patch_n, struct style_
 	}
 	attrib_release(A, d->data);
 	d->data = new_attr;
+	return 1;
 }
 
 void
