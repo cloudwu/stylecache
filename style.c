@@ -341,7 +341,8 @@ static int
 check_handle_dirty(struct style_cache *C, uint64_t handle) {
 	if (DATA_NODE(handle)) {
 		int index = find_by_id(C, handle);
-		assert(index >= 0);
+		if (index < 0)	// handle is not exist, so always dirty
+			return 1;
 		struct style_data *d = &C->arena.h[index];
 		return d->dirty;
 	} else {
