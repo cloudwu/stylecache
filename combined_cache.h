@@ -236,7 +236,7 @@ remove_index_(uint64_t queue[COMBINE_CACHE_HASH_SIZE], int index, int slot) {
 
 static inline void
 add_node_index_(uint64_t queue[COMBINE_CACHE_HASH_SIZE], int index, int slot) {
-	queue[index] = queue[index] << COMBINE_CACHE_HASH_C | (slot + 1);
+	queue[index] = queue[index] << COMBINE_CACHE_BITS | (slot + 1);
 }
 
 static void

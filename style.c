@@ -261,6 +261,7 @@ style_modify(struct style_cache *C, style_handle_t s, int patch_n, struct style_
 		if (tmp[i] >= 0) {
 			tmp[i2] = tmp[i];
 			++i2;
+		} else {
 			--n2;
 		}
 	}
