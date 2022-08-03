@@ -941,16 +941,17 @@ attrib_release(struct attrib_state *A, attrib_t handle) {
 	struct attrib_array * a = A->tuple.s[index].a;
 	--a->refcount;
 	if (a->refcount == 0) {
-		int tail = A->remove_tail + 1;
-		if (tail >= DELAY_REMOVE)
+		int tail = A->remove_tail;
+		// push index, delay delete
+		A->removed[tail] = index;
+		if (++tail >= DELAY_REMOVE) {
 			tail -= DELAY_REMOVE;
+		}
+		A->remove_tail = tail;
 		if (tail == A->remove_head) {
 			// full
 			delete_tuple(A, pop_removed(A));
 		}
-		// push index, delay delete
-		A->removed[tail] = index;
-		A->remove_tail = tail;
 	}
 	return a->refcount;
 }
