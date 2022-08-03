@@ -341,6 +341,7 @@ reset_dirty(struct style_arena *A) {
 		int index = A->dirty[i];
 		A->h[index].dirty = 0;
 	}
+	A->dirty_n = 0;
 }
 
 static int check_node_dirty(struct style_cache *C, struct combined_node *node);
