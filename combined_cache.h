@@ -248,8 +248,8 @@ remove_node_index_(struct combined_cache *c, int slot) {
 		c->combined_index[h] = 0;
 		for (i=0;i<COMBINE_CACHE_SIZE;i++) {
 			struct combined_node *n = &c->queue[i];
-			if (n->id && h == cache_hash_combined_(node->a, node->b)) {
-				add_node_index_(c->combined_index, h, slot);
+			if (n->id && h == cache_hash_combined_(n->a, n->b)) {
+				add_node_index_(c->combined_index, h, i);
 			}
 		}
 	}
@@ -258,8 +258,8 @@ remove_node_index_(struct combined_cache *c, int slot) {
 		c->id_index[h] = 0;
 		for (i=0;i<COMBINE_CACHE_SIZE;i++) {
 			struct combined_node *n = &c->queue[i];
-			if (n->id && h == cache_hash_id_(node->id)) {
-				add_node_index_(c->id_index, h, slot);
+			if (n->id && h == cache_hash_id_(n->id)) {
+				add_node_index_(c->id_index, h, i);
 			}
 		}
 	}
