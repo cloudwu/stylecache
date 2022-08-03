@@ -930,6 +930,7 @@ pop_removed(struct attrib_state *A) {
 	int head = A->remove_head + 1;
 	if (head >= DELAY_REMOVE)
 		head -= DELAY_REMOVE;
+	A->remove_head = head;
 	return r;
 }
 
