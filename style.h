@@ -8,9 +8,10 @@ typedef struct { uint64_t idx; } style_handle_t;
 static const style_handle_t STYLE_NULL = { 0 };
 
 struct style_attrib {
-	uint8_t key;
-	void *data;
-	size_t sz;
+	void *data;	// input
+	size_t sz;	// input
+	uint8_t key;// input
+	int change;	// output
 };
 
 struct style_cache * style_newcache(const unsigned char inherit_mask[128]);

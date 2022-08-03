@@ -234,7 +234,10 @@ style_modify(struct style_cache *C, style_handle_t s, int patch_n, struct style_
 				int kv = attrib_entryid(A, patch[i].key, patch[i].data, patch[i].sz);
 				tmp[n++] = kv;
 				assert(n <= MAX_KEY);
+				patch[i].change = 1;
 				change = 1;
+			} else {
+				patch[i].change = 0;
 			}
 		} else {
 			if (patch[i].data) {
@@ -242,12 +245,16 @@ style_modify(struct style_cache *C, style_handle_t s, int patch_n, struct style_
 				int kv = attrib_entryid(A, patch[i].key, patch[i].data, patch[i].sz);
 				if (tmp[index] != kv) {
 					change = 1;
+					patch[i].change = 1;
 					tmp[index] = kv;
+				} else {
+					patch[i].change = 0;
 				}
 			} else {
 				// remove
 				++removed;
 				tmp[index] = -1;
+				patch[i].change = 1;
 				change = 1;
 			}
 		}
@@ -457,15 +464,15 @@ main() {
 	struct style_cache * C = style_newcache(inherit_mask);
 
 	struct style_attrib a[] = {
-		{ 1, STR("hello") },
-		{ 2, STR("world") },
+		{ STR("hello") ,1 },
+		{ STR("world") ,2 },
 	};
 
 	style_handle_t h1 = style_create(C, sizeof(a)/sizeof(a[0]), a);
 
 	struct style_attrib b[] = {
-		{ 1, STR("hello world") },
-		{ 2, STR("world") },
+		{ STR("hello world"), 1 },
+		{ STR("world"), 2 },
 	};
 
 	style_handle_t h2 = style_create(C, sizeof(b)/sizeof(b[0]), b);
@@ -483,8 +490,8 @@ main() {
 	// Modify
 
 	struct style_attrib patch[] = {
-		{ 1, NULL },	// remove 1
-		{ 2, STR("WORLD") },
+		{ NULL, 1 },	// remove 1
+		{ STR("WORLD"), 2 },
 	};
 
 	style_modify(C, h1, sizeof(patch)/sizeof(patch[0]), patch);
