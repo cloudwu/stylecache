@@ -929,7 +929,6 @@ delete_tuple(struct attrib_state *A, int index) {
 
 static int
 pop_removed(struct attrib_state *A) {
-	assert(A->remove_head != A->remove_tail);
 	int r = A->removed[A->remove_head];
 	int head = A->remove_head + 1;
 	if (head >= DELAY_REMOVE)
