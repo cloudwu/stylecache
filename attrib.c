@@ -87,7 +87,7 @@ struct attrib_tuple_lookup {
 
 #define INHERIT_ID_MAX (1<<20)
 #define INHERIT_CACHE_SIZE 8191
-#define INHERIT_MAX_COUNT ((1<<12)-1)
+#define INHERIT_MAX_COUNT ((1<<11)-1)
 
 // 64bits
 struct inherit_entry {
@@ -206,6 +206,8 @@ inherit_cache_retirekey(struct inherit_cache *c, int key) {
 	}
 }
 
+// Cache a,b and result in inherit_cache
+// If cache failed, don't set keys in inherit_cache, otherwise, addref in it.
 static void
 inherit_cache_set(struct inherit_cache *c, int a, int b, int withmask, int result) {
 	uint32_t v = (a & 0xffff) | ((b & 0xffff) << 16);
@@ -236,6 +238,8 @@ inherit_cache_set(struct inherit_cache *c, int a, int b, int withmask, int resul
 		unset_key(c, b);
 		return;
 	}
+
+	e->valid = 1;
 }
 
 static size_t
