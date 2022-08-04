@@ -7,11 +7,13 @@
 #include <stdint.h>
 #include <stdio.h>
 #include "attrib.h"
+#include "hash.h"
 
 #define COMBINE_CACHE_BITS 12
 #define COMBINE_CACHE_SIZE_MASK ((1 << COMBINE_CACHE_BITS) - 1)
 #define COMBINE_CACHE_SIZE COMBINE_CACHE_SIZE_MASK // 4095
-#define COMBINE_CACHE_HASH_SIZE 8191	// 2x size of COMBINE_CACHE_SIZE, and it's a prime.
+#define COMBINE_CACHE_HASH_SIZE (1<<13) // 8192, 2x size of COMBINE_CACHE_SIZE
+#define COMBINE_CACHE_HASH_SHIFT (32-13)
 #define COMBINE_CACHE_HASH_C (sizeof(uint64_t) * 8 / COMBINE_CACHE_BITS)	// 5
 
 struct combined_node {
@@ -99,19 +101,13 @@ combined_cache_init(struct combined_cache *c) {
 }
 
 static inline int
-int32hash_(uint32_t v) {
-    v = v * 0xdeece66d + 0xb;
-	return v % COMBINE_CACHE_HASH_SIZE;
-}
-
-static inline int
 cache_hash_id_(uint64_t id) {
-	return int32hash_(id>>1);
+	return int32_hash(id>>1) >> COMBINE_CACHE_HASH_SHIFT;
 }
 
 static inline int
 cache_hash_combined_(uint64_t a, uint64_t b) {
-	return int32hash_((a & 0xffff) | (( b & 0xffff) << 16));
+	return int32_hash((a & 0xffff) | (( b & 0xffff) << 16)) >> COMBINE_CACHE_HASH_SHIFT;
 }
 
 static struct combined_node *

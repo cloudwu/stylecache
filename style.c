@@ -1,6 +1,6 @@
 #include "style.h"
 #include "attrib.h"
-#include "attrib.h"
+#include "hash.h"
 #include "combined_cache.h"
 
 #include <stdint.h>
@@ -10,7 +10,7 @@
 #include <stdio.h>
 #include <inttypes.h>
 
-#define ARENA_DEFAULT_SIZE 1024
+#define ARENA_DEFAULT_BITS 10
 #define HASH_STEP 5
 #define HASH_MAXSTEP 5
 #define MAX_KEY 128
@@ -33,6 +33,7 @@ struct style_arena {
 	struct style_data *h;
 	int *dirty;
 	int n;
+	int shift;
 	int dirty_n;
 };
 
@@ -44,27 +45,16 @@ struct style_cache {
 	unsigned char mask[MAX_KEY];
 };
 
-static inline int
-hash_attrib(attrib_t attr, int n) {
-	int h = (unsigned)(2654435761 * attr.idx) & (n-1);
-	return h;
-}
-
 static inline uint64_t
 new_id(struct style_cache *c) {
 	c->lastid += 2;
 	return c->lastid;
 }
 
-static inline int
-hash_id64(uint64_t id, int n) {
-	uint32_t v = (uint32_t)id;
-    v = v * 0xdeece66d + 0xb;
-	return v % (n-1);
-}
-
 static void
-style_arena_init(struct style_arena *arena, int n) {
+style_arena_init(struct style_arena *arena, int bits) {
+	int n = 1 << bits;
+	arena->shift = 32 - bits;
 	arena->n = n;
 	arena->h = (struct style_data *)malloc(n * sizeof(struct style_data));
 	arena->dirty = (int *)malloc(n * sizeof(int));
@@ -89,7 +79,7 @@ struct style_cache *
 style_newcache(const unsigned char inherit_mask[128]) {
 	struct style_cache * c = (struct style_cache *)malloc(sizeof(*c));
 	c->lastid = 0;
-	style_arena_init(&c->arena, ARENA_DEFAULT_SIZE);
+	style_arena_init(&c->arena, ARENA_DEFAULT_BITS);
 	combined_cache_init(&c->cache);
 	c->A = attrib_newstate(inherit_mask);
 	return c;
@@ -113,7 +103,7 @@ style_memsize(struct style_cache *C) {
 
 static int
 insert_id(struct style_arena *arena, uint64_t id, attrib_t attr) {
-	int slot = hash_id64(id, arena->n);
+	int slot = hash_mainslot(id64_hash(id), arena);
 	int i;
 	for (i=0;i<HASH_MAXSTEP;i++) {
 		struct style_data *d = &arena->h[slot];
@@ -134,7 +124,8 @@ insert_id(struct style_arena *arena, uint64_t id, attrib_t attr) {
 	struct style_data *data = arena->h;
 	int dirty_n = arena->dirty_n;
 	int *dirty = arena->dirty;
-	style_arena_init(arena, n * 2);
+	int bits = 32 - arena->shift;
+	style_arena_init(arena, bits+1);
 
 	for (i=0;i<n;i++) {
 		if (data[i].id != 0 && !data[i].removed) {
@@ -171,7 +162,7 @@ dealloc_data(struct style_cache *c, int index) {
 static int
 find_by_id(struct style_cache *c, uint64_t id) {
 	struct style_arena *arena = &c->arena;
-	int slot = hash_id64(id, arena->n);
+	int slot = hash_mainslot(id64_hash(id), arena);
 	int i;
 	for (i=0;i<HASH_MAXSTEP;i++) {
 		struct style_data *d = &arena->h[slot];

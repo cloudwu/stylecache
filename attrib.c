@@ -1,4 +1,5 @@
 #include "attrib.h"
+#include "hash.h"
 #include <stdint.h>
 #include <stdlib.h>
 #include <assert.h>
@@ -12,7 +13,7 @@
 #define EMBED_VALUE_SIZE 8
 #define EMBED_HASH_SLOT 7
 #define HASH_STEP 5
-#define HASH_SIZE 128
+#define HASH_INIT_BITS 7
 #define HASH_MAXSTEP 5
 #define MAX_KEY 128
 #define DELAY_REMOVE 4096
@@ -51,6 +52,7 @@ struct attrib_hash_entry {
 
 struct attrib_lookup {
 	int n;
+	int shift;
 	struct attrib_hash_entry *e;
 };
 
@@ -82,11 +84,13 @@ struct attrib_tuple_hash_entry {
 
 struct attrib_tuple_lookup {
 	int n;
+	int shift;
 	struct attrib_tuple_hash_entry *e;
 };
 
 #define INHERIT_ID_MAX (1<<20)
-#define INHERIT_CACHE_SIZE 8191
+#define INHERIT_CACHE_SIZE (1<<13)// 8192, 13bits
+#define INHERIT_CACHE_SHIFT (32-13)
 #define INHERIT_MAX_COUNT ((1<<11)-1)
 
 // 64bits
@@ -131,7 +135,8 @@ inherit_cache_init(struct inherit_cache *c) {
 static inline int
 hash_inherit_key(int a) {
 	uint32_t v = (uint32_t)a;
-	return (v * 0xdeece66d + 0xb) % INHERIT_CACHE_SIZE;
+	v = int32_hash(v) >> INHERIT_CACHE_SHIFT;
+	return v;
 }
 
 static inline int
@@ -448,9 +453,11 @@ arena_addref(struct attrib_arena *arena, int id) {
 }
 
 static void
-init_slots(struct attrib_lookup *h, int n) {
+init_slots(struct attrib_lookup *h, int bits) {
+	int n = 1 << bits;
 	h->e = (struct attrib_hash_entry *)malloc(n * sizeof(struct attrib_hash_entry));
 	h->n = n;
+	h->shift = 32 - bits;
 	int i;
 	for (i=0;i<n;i++) {
 		// set invalid
@@ -461,7 +468,7 @@ init_slots(struct attrib_lookup *h, int n) {
 
 static void
 hash_init(struct attrib_lookup *h) {
-	init_slots(h, HASH_SIZE);
+	init_slots(h, HASH_INIT_BITS);
 }
 
 static void
@@ -482,9 +489,11 @@ hash_deinit(struct attrib_lookup *h) {
 }
 
 static void
-init_tuple_lut_slots(struct attrib_tuple_lookup *lut, int n) {
+init_tuple_lut_slots(struct attrib_tuple_lookup *lut, int bits) {
+	int n = 1 << bits;
 	lut->e = (struct attrib_tuple_hash_entry *)malloc(n * sizeof(struct attrib_tuple_hash_entry));
 	lut->n = n;
+	lut->shift = 32 - bits;
 	int i;
 	for (i=0;i<n;i++) {
 		// set invalid
@@ -503,7 +512,7 @@ check_tuple(struct attrib_state *A, int index, int n, const int a[]) {
 static int
 tuple_hash_find(struct attrib_state *A, uint32_t hash, int n, const int a[]) {
 	struct attrib_tuple_lookup *h = &A->tuple_l;
-	int slot = hash & (h->n - 1);
+	int slot = hash_mainslot(hash, h);
 	struct attrib_tuple_hash_entry *e = &h->e[slot];
 	if (e->hash == 0)
 		return -1;
@@ -529,7 +538,7 @@ tuple_hash_find(struct attrib_state *A, uint32_t hash, int n, const int a[]) {
 
 static void
 tuple_hash_insert(struct attrib_tuple_lookup *h, uint32_t hash, int index) {
-	int slot = hash & (h->n - 1);
+	int slot = hash_mainslot(hash, h);
 	int i;
 	for (i=0;i<HASH_MAXSTEP;i++) {
 		struct attrib_tuple_hash_entry *e = &h->e[slot];
@@ -545,10 +554,11 @@ tuple_hash_insert(struct attrib_tuple_lookup *h, uint32_t hash, int index) {
 	// rehash
 	struct attrib_tuple_hash_entry *e = h->e;
 	int n = h->n;
+	int bits = 32 - h->shift;
 
-	init_tuple_lut_slots(h, n * 2);
+	init_tuple_lut_slots(h, bits+1);
 	for (i=0;i<n;i++) {
-		if (e->hash != 0 && e->index >= 0) {
+		if (e[i].hash != 0 && e[i].index >= 0) {
 			tuple_hash_insert(h, e[i].hash, e[i].index);
 		}
 	}
@@ -574,7 +584,7 @@ tuple_hash_remove(struct attrib_tuple_lookup *h, uint32_t hash, int index) {
 
 static void
 tuple_hash_init(struct attrib_tuple_lookup *lut) {
-	init_tuple_lut_slots(lut, HASH_SIZE);
+	init_tuple_lut_slots(lut, HASH_INIT_BITS);
 }
 
 static void
@@ -612,7 +622,8 @@ static void
 rehash(struct attrib_lookup *h) {
 	struct attrib_hash_entry *e = h->e;
 	int n = h->n;
-	init_slots(h, n * 2);
+	int bits = 32 - h->shift;
+	init_slots(h, bits + 1);
 	int i,j;
 	for (i=0;i<n;i++) {
 		int * p = hashvalue_ptr(&e[i]);
@@ -629,7 +640,7 @@ rehash(struct attrib_lookup *h) {
 static struct attrib_hash_entry *
 find_nextslot(struct attrib_lookup *h, uint32_t hash) {
 	int i;
-	int index = hash & (h->n - 1);
+	int index = hash_mainslot(hash, h);
 	for (i=0;i<HASH_MAXSTEP;i++) {
 		index += HASH_STEP;
 		if (index >= h->n)
@@ -645,7 +656,7 @@ find_nextslot(struct attrib_lookup *h, uint32_t hash) {
 
 static struct attrib_hash_entry *
 find_slot(struct attrib_lookup *h, uint32_t hash) {
-	int mainslot = hash & (h->n - 1);
+	int mainslot = hash_mainslot(hash, h);
 	struct attrib_hash_entry * e = &h->e[mainslot];
 	if (e->hash == hash || hashvalue_ptr(e) == NULL)
 		return e;
@@ -718,28 +729,6 @@ attrib_hash_lookup(struct attrib_lookup *h, uint32_t hash, int *n) {
 		return NULL;
 	*n = (v == e->index) ? EMBED_HASH_SLOT : e->index[1];
 	return v;
-}
-
-static uint32_t
-kv_hash(int key, void *value, size_t l) {
-	uint8_t *str = (uint8_t *)value;
-	uint32_t h = (uint32_t)(key ^ l);
-	for (; l > 0; l--)
-		h ^= ((h<<5) + (h>>2) + (str[l - 1]));
-	return h;
-}
-
-static uint32_t
-array_hash(int *v, int n) {
-	uint8_t *str = (uint8_t*)v;
-	uint32_t h = (uint32_t)(n);
-	int l = n*4;
-	for (; l > 0; l--)
-		h ^= ((h<<5) + (h>>2) + (str[l - 1]));
-	// hash 0 is reserved for empty slot
-	if (h == 0)
-		return 1;
-	return h;
 }
 
 struct attrib_state *
@@ -886,7 +875,6 @@ attrib_create(struct attrib_state *A, int n, const int e[]) {
 		n = index;
 	}
 	uint32_t hash = array_hash(tmp, n);
-
 	int index = tuple_hash_find(A, hash, n, tmp);
 	if (index >= 0) {
 		attrib_t ret = { index };
