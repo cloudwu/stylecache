@@ -111,30 +111,22 @@ cache_hash_combined_(uint64_t a, uint64_t b) {
 }
 
 static struct combined_node *
-next_node_(struct combined_cache *c, struct combined_node *node) {
-	int index = next_list_(node->list);
-	if (index < 0)
-		return NULL;
-	return &c->queue[index];
-}
-
-static struct combined_node *
 lookup_combined_(struct combined_cache *c, int hash, uint64_t a, uint64_t b) {
 	int i;
-	struct combined_node *n = NULL;
 	uint64_t v = c->combined_index[hash];
 	for (i=0;i<COMBINE_CACHE_HASH_C;i++) {
 		uint32_t index = v & COMBINE_CACHE_SIZE_MASK;
 		if (index == 0) {
 			return NULL;
 		}
-		n = &c->queue[index-1];
+		struct combined_node *n = &c->queue[index-1];
 		if (n->a == a && n->b == b)
 			return n;
 		v >>= COMBINE_CACHE_BITS;
 	}
 
-	while ((n=next_node_(c, n))) {
+	for (i=0;i<COMBINE_CACHE_SIZE;i++) {
+		struct combined_node *n = &c->queue[i];
 		if (n->a == a && n->b == b)
 			return n;
 	}
@@ -217,7 +209,7 @@ remove_index_(uint64_t queue[COMBINE_CACHE_HASH_SIZE], int index, int slot) {
 		int index = v & COMBINE_CACHE_SIZE_MASK;
 		if (index == 0)
 			break;
-		if (index != slot) {
+		if (index != slot + 1) {
 			nv = nv << COMBINE_CACHE_BITS | index;
 		} else {
 			dirty = 1;
