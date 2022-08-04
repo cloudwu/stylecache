@@ -939,14 +939,19 @@ attrib_release(struct attrib_state *A, attrib_t handle) {
 	if (a->refcount == 0) {
 		int tail = A->remove_tail;
 		// push index, delay delete
+		a->refcount = 1;	// keep ref in delay queue
 		A->removed[tail] = index;
 		if (++tail >= DELAY_REMOVE) {
 			tail -= DELAY_REMOVE;
 		}
 		A->remove_tail = tail;
 		if (tail == A->remove_head) {
-			// full
-			delete_tuple(A, pop_removed(A));
+			// delay queue is full
+			int removed_index = pop_removed(A);
+			struct attrib_array * removed = A->tuple.s[removed_index].a;
+			if (--removed->refcount == 0) {
+				delete_tuple(A, removed_index);
+			}
 		}
 	}
 	return a->refcount;
