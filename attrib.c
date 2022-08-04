@@ -554,6 +554,7 @@ tuple_hash_insert(struct attrib_tuple_lookup *h, uint32_t hash, int index) {
 		}
 	}
 	free(e);
+	tuple_hash_insert(h, hash, index);
 }
 
 static void
@@ -565,6 +566,7 @@ tuple_hash_remove(struct attrib_tuple_lookup *h, uint32_t hash, int index) {
 			e->index = -1;
 			return;
 		}
+		assert(e->hash != 0);
 		slot += HASH_STEP;
 		if (slot >= h->n)
 			slot -= h->n;

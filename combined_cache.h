@@ -292,7 +292,6 @@ combined_cache_new(struct combined_cache *c, uint64_t a, uint64_t b, int mask, u
 
 	int slot = c->tail;
 	node = &c->queue[slot];
-	node->id = 0;
 	remove_node_index_(c, slot);
 	if (node->value) {
 		attrib_release(A, node->data);
