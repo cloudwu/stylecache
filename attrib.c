@@ -133,7 +133,7 @@ inherit_cache_init(struct inherit_cache *c) {
 }
 
 static inline int
-hash_inherit_key(int a) {
+hash_inherit_key_slot(int a) {
 	uint32_t v = (uint32_t)a;
 	v = int32_hash(v) >> INHERIT_CACHE_SHIFT;
 	return v;
@@ -143,7 +143,7 @@ static inline int
 inherit_cache_key_valid(struct inherit_cache *c, int a) {
 	if (a >= INHERIT_ID_MAX)
 		return 0;
-	struct inherit_key *k = &c->key[hash_inherit_key(a)];
+	struct inherit_key *k = &c->key[hash_inherit_key_slot(a)];
 	if (k->key != a)
 		return 0;
 	if (k->count == 0 || !k->valid)
@@ -152,13 +152,18 @@ inherit_cache_key_valid(struct inherit_cache *c, int a) {
 	return 1;
 }
 
+static inline int
+hash_inherit_combined_slot(int a, int b) {
+	uint32_t v = (a & 0xffff) | ((b & 0xffff) << 16);
+	v = int32_hash(v) >> INHERIT_CACHE_SHIFT;
+	return (int)v;
+}
+
 static int
 inherit_cache_fetch(struct inherit_cache *c, int a, int b, int withmask) {
 	if (!inherit_cache_key_valid(c, a) || !inherit_cache_key_valid(c, a))
 		return -1;
-	uint32_t v = (a & 0xffff) | ((b & 0xffff) << 16);
-	v = v * 0xdeece66d + 0xb;
-	v %= INHERIT_CACHE_SIZE;
+	int v = hash_inherit_combined_slot(a,b);
 	struct inherit_entry *e = &c->s[v];
 	if (e->valid && e->a == a && e->b == b && e->withmask == withmask)
 		return e->result;
@@ -167,14 +172,14 @@ inherit_cache_fetch(struct inherit_cache *c, int a, int b, int withmask) {
 
 static inline void
 unset_key(struct inherit_cache *c, int a) {
-	struct inherit_key *k = &c->key[hash_inherit_key(a)];
+	struct inherit_key *k = &c->key[hash_inherit_key_slot(a)];
 	assert(k->key == a && k->count >0);
 	--k->count;
 }
 
 static inline int
 set_key(struct inherit_cache *c, int key) {
-	struct inherit_key *k = &c->key[hash_inherit_key(key)];
+	struct inherit_key *k = &c->key[hash_inherit_key_slot(key)];
 	if (!k->valid) {
 		if (k->count > 0) {
 			// clear entries with key
@@ -205,7 +210,7 @@ set_key(struct inherit_cache *c, int key) {
 
 static inline void
 inherit_cache_retirekey(struct inherit_cache *c, int key) {
-	struct inherit_key *k = &c->key[hash_inherit_key(key)];
+	struct inherit_key *k = &c->key[hash_inherit_key_slot(key)];
 	if (k->key == key) {
 		k->valid = 0;
 	}
@@ -215,9 +220,7 @@ inherit_cache_retirekey(struct inherit_cache *c, int key) {
 // If cache failed, don't set keys in inherit_cache, otherwise, addref in it.
 static void
 inherit_cache_set(struct inherit_cache *c, int a, int b, int withmask, int result) {
-	uint32_t v = (a & 0xffff) | ((b & 0xffff) << 16);
-	v = v * 0xdeece66d + 0xb;
-	v %= INHERIT_CACHE_SIZE;
+	int v = hash_inherit_combined_slot(a,b);
 	struct inherit_entry *e = &c->s[v];
 	if (e->valid) {
 		unset_key(c, e->a);
