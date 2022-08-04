@@ -361,6 +361,7 @@ static void
 tuple_delete(struct attrib_tuple *tuple, int index) {
 	assert(index >=0 && index < tuple->n);
 	free(tuple->s[index].a);
+	tuple->s[index].a = NULL;
 	tuple->s[index].next = tuple->freelist;
 	tuple->freelist = index;
 }
@@ -568,7 +569,7 @@ tuple_hash_insert(struct attrib_tuple_lookup *h, uint32_t hash, int index) {
 
 static void
 tuple_hash_remove(struct attrib_tuple_lookup *h, uint32_t hash, int index) {
-	int slot = hash & (h->n - 1);
+	int slot = hash_mainslot(hash, h);
 	for (;;) {
 		struct attrib_tuple_hash_entry *e = &h->e[slot];
 		if (e->hash == hash && e->index == index) {
