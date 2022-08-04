@@ -113,19 +113,43 @@ struct inherit_cache {
 	struct inherit_key key[INHERIT_CACHE_SIZE];
 };
 
+struct delay_removed {
+	int head;
+	int tail;
+	int removed[DELAY_REMOVE];
+};
+
 struct attrib_state {
 	struct attrib_arena arena;
 	struct attrib_lookup arena_l;
 	struct attrib_tuple tuple;
 	struct attrib_tuple_lookup tuple_l;
 	struct inherit_cache icache;
-	int remove_head;
-	int remove_tail;
-	int removed[DELAY_REMOVE];
+	struct delay_removed kv_removed;
+	struct delay_removed tuple_removed;
 	unsigned char inherit_mask[128];
-	int kv_used;
-	int kv_n;
 };
+
+static int
+delay_remove(struct delay_removed *removed, int index) {
+	int tail = removed->tail;
+	// push index, delay delete
+	removed->removed[tail] = index;
+	if (++tail >= DELAY_REMOVE) {
+		tail -= DELAY_REMOVE;
+	}
+	removed->tail = tail;
+	if (tail == removed->head) {
+		// delay queue is full
+		int removed_index = removed->removed[removed->head];
+		int head = removed->head + 1;
+		if (head >= DELAY_REMOVE)
+			head -= DELAY_REMOVE;
+		removed->head = head;
+		return removed_index;
+	}
+	return -1;
+}
 
 static void
 inherit_cache_init(struct inherit_cache *c) {
@@ -429,33 +453,6 @@ arena_create(struct attrib_arena *arena, int key, void *value, size_t sz, uint32
 	return index;
 }
 
-static int
-arena_release(struct attrib_arena *arena, int id) {
-	assert(id >= 0 && id < arena->n);
-	struct attrib_kv * kv = &arena->e[id];
-	assert(kv->refcount > 0);
-	int c = --kv->refcount;
-	if (c == 0) {
-		if (kv->blob) {
-			free(kv->v.ptr);
-			kv->blob = 0;
-			kv->refcount = 1;	// avoid collect
-		}
-		kv->v.next = arena->freelist;
-		arena->freelist = id;
-	}
-	return c;
-}
-
-static int
-arena_addref(struct attrib_arena *arena, int id) {
-	assert(id >= 0 && id < arena->n);
-	struct attrib_kv * kv = &arena->e[id];
-	++kv->refcount;
-	assert(kv->refcount != 0);
-	return kv->refcount;
-}
-
 static void
 init_slots(struct attrib_lookup *h, int bits) {
 	int n = 1 << bits;
@@ -744,11 +741,6 @@ attrib_newstate(const unsigned char *inherit_mask) {
 	tuple_hash_init(&A->tuple_l);
 	inherit_cache_init(&A->icache);
 
-	A->remove_head = 0;
-	A->remove_tail = 0;
-	A->kv_used = 0;
-	A->kv_n = 0;
-
 	if (inherit_mask == NULL) {
 		memset(A->inherit_mask,1,sizeof(A->inherit_mask));
 	} else {
@@ -799,7 +791,6 @@ attrib_entryid(struct attrib_state *A, int key, void *ptr, size_t sz) {
 			}
 		}
 	}
-	A->kv_n++;
 	return new_index;
 }
 
@@ -813,19 +804,30 @@ create_attrib_array(int n, uint32_t hash) {
 	return a;
 }
 
-static void
-kv_collect(struct attrib_state *A) {
-	int i;
-	for (i=0;i<A->arena.n;i++) {
-		struct attrib_kv *kv = (struct attrib_kv *)&A->arena.e[i];
-		if (kv->refcount == 0) {
-			attrib_hash_remove(&A->arena_l, kv->hash, i);
-			arena_release(&A->arena, i);
-			--A->kv_n;
+static int
+arena_release(struct attrib_state *A, int id) {
+	struct attrib_arena *arena = &(A->arena);
+	assert(id >= 0 && id < arena->n);
+	struct attrib_kv * kv = &arena->e[id];
+	assert(kv->refcount > 0);
+	int c = --kv->refcount;
+	if (c == 0) {
+		kv->refcount = 1;
+		int removed_index = delay_remove(&A->kv_removed, id);
+		if (removed_index >= 0) {
+			kv = &arena->e[removed_index];
+			assert(kv->refcount == 1);
+			attrib_hash_remove(&A->arena_l, kv->hash, removed_index);
+			if (kv->blob) {
+				free(kv->v.ptr);
+				kv->blob = 0;
+			}
+			kv->v.next = arena->freelist;
+			arena->freelist = id;
 		}
 	}
+	return c;
 }
-
 
 // add index(kv) into buffer[n]
 static int
@@ -888,12 +890,6 @@ attrib_create(struct attrib_state *A, int n, const int e[]) {
 	struct attrib_array *a = create_attrib_array(n, hash);
 	for (i=0;i<n;i++) {
 		a->data[i] = tmp[i];
-		if (arena_addref(&A->arena, tmp[i]) == 1) {
-			A->kv_used++;
-		}
-	}
-	if (A->kv_used * 2 < A->kv_n) {
-		kv_collect(A);
 	}
 	int id = tuple_new(&A->tuple, a);
 	tuple_hash_insert(&A->tuple_l, hash, id);
@@ -904,30 +900,15 @@ attrib_create(struct attrib_state *A, int n, const int e[]) {
 static void
 delete_tuple(struct attrib_state *A, int index) {
 	struct attrib_array * a = A->tuple.s[index].a;
-	if (a->refcount > 0) {
-		// realive
-		return;
-	}
+	assert(a->refcount == 0);
 	int i;
 	for (i=0;i<a->n;i++) {
-		if (arena_release(&A->arena, a->data[i]) == 0) {
-			A->kv_used--;
-		}
+		arena_release(A, a->data[i]);
 	}
 	tuple_hash_remove(&A->tuple_l, a->hash, index);
 	tuple_delete(&A->tuple, index);
 
 	inherit_cache_retirekey(&A->icache, index);
-}
-
-static int
-pop_removed(struct attrib_state *A) {
-	int r = A->removed[A->remove_head];
-	int head = A->remove_head + 1;
-	if (head >= DELAY_REMOVE)
-		head -= DELAY_REMOVE;
-	A->remove_head = head;
-	return r;
 }
 
 int
@@ -937,21 +918,11 @@ attrib_release(struct attrib_state *A, attrib_t handle) {
 	struct attrib_array * a = A->tuple.s[index].a;
 	--a->refcount;
 	if (a->refcount == 0) {
-		int tail = A->remove_tail;
-		// push index, delay delete
 		a->refcount = 1;	// keep ref in delay queue
-		A->removed[tail] = index;
-		if (++tail >= DELAY_REMOVE) {
-			tail -= DELAY_REMOVE;
-		}
-		A->remove_tail = tail;
-		if (tail == A->remove_head) {
-			// delay queue is full
-			int removed_index = pop_removed(A);
-			struct attrib_array * removed = A->tuple.s[removed_index].a;
-			if (--removed->refcount == 0) {
-				delete_tuple(A, removed_index);
-			}
+		int removed_index = delay_remove(&A->tuple_removed, index);
+		if (removed_index >= 0) {
+			assert(A->tuple.s[removed_index].a->refcount == 1);
+			delete_tuple(A, removed_index);
 		}
 	}
 	return a->refcount;
