@@ -548,9 +548,8 @@ tuple_hash_insert(struct attrib_tuple_lookup *h, uint32_t hash, int index) {
 
 	init_tuple_lut_slots(h, n * 2);
 	for (i=0;i<n;i++) {
-		struct attrib_tuple_hash_entry *e = &h->e[i];
-		if (e->hash != 0 && e->index >=0) {
-			tuple_hash_insert(h, e->hash, e->index);
+		if (e->hash != 0 && e->index >= 0) {
+			tuple_hash_insert(h, e[i].hash, e[i].index);
 		}
 	}
 	free(e);
