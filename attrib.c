@@ -152,6 +152,12 @@ delay_remove(struct delay_removed *removed, int index) {
 }
 
 static void
+delay_remove_init(struct delay_removed *r) {
+	r->head = 0;
+	r->tail = 0;
+}
+
+static void
 inherit_cache_init(struct inherit_cache *c) {
 	memset(c, 0, sizeof(*c));
 }
@@ -732,6 +738,7 @@ attrib_hash_lookup(struct attrib_lookup *h, uint32_t hash, int *n) {
 	return v;
 }
 
+
 struct attrib_state *
 attrib_newstate(const unsigned char *inherit_mask) {
 	struct attrib_state *A = (struct attrib_state *)malloc(sizeof(*A));
@@ -740,6 +747,8 @@ attrib_newstate(const unsigned char *inherit_mask) {
 	tuple_init(&A->tuple);
 	tuple_hash_init(&A->tuple_l);
 	inherit_cache_init(&A->icache);
+	delay_remove_init(&A->kv_removed);
+	delay_remove_init(&A->tuple_removed);
 
 	if (inherit_mask == NULL) {
 		memset(A->inherit_mask,1,sizeof(A->inherit_mask));
