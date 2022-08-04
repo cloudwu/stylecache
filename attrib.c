@@ -816,14 +816,15 @@ arena_release(struct attrib_state *A, int id) {
 		int removed_index = delay_remove(&A->kv_removed, id);
 		if (removed_index >= 0) {
 			kv = &arena->e[removed_index];
-			assert(kv->refcount == 1);
-			attrib_hash_remove(&A->arena_l, kv->hash, removed_index);
-			if (kv->blob) {
-				free(kv->v.ptr);
-				kv->blob = 0;
+			if (--kv->refcount == 0) {
+				attrib_hash_remove(&A->arena_l, kv->hash, removed_index);
+				if (kv->blob) {
+					free(kv->v.ptr);
+					kv->blob = 0;
+				}
+				kv->v.next = arena->freelist;
+				arena->freelist = id;
 			}
-			kv->v.next = arena->freelist;
-			arena->freelist = id;
 		}
 	}
 	return c;
@@ -900,7 +901,8 @@ attrib_create(struct attrib_state *A, int n, const int e[]) {
 static void
 delete_tuple(struct attrib_state *A, int index) {
 	struct attrib_array * a = A->tuple.s[index].a;
-	assert(a->refcount == 0);
+	if (--a->refcount > 0)
+		return;
 	int i;
 	for (i=0;i<a->n;i++) {
 		arena_release(A, a->data[i]);
@@ -921,7 +923,6 @@ attrib_release(struct attrib_state *A, attrib_t handle) {
 		a->refcount = 1;	// keep ref in delay queue
 		int removed_index = delay_remove(&A->tuple_removed, index);
 		if (removed_index >= 0) {
-			assert(A->tuple.s[removed_index].a->refcount == 1);
 			delete_tuple(A, removed_index);
 		}
 	}
