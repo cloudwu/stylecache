@@ -839,6 +839,15 @@ arena_release(struct attrib_state *A, int id) {
 	return c;
 }
 
+static int
+arena_addref(struct attrib_arena *arena, int id) {
+	assert(id >= 0 && id < arena->n);
+	struct attrib_kv * kv = &arena->e[id];
+	++kv->refcount;
+	assert(kv->refcount != 0);
+	return kv->refcount;
+}
+
 // add index(kv) into buffer[n]
 static int
 add_kv(struct attrib_state *A, int buffer[MAX_KEY], int n, int index) {
@@ -900,6 +909,7 @@ attrib_create(struct attrib_state *A, int n, const int e[]) {
 	struct attrib_array *a = create_attrib_array(n, hash);
 	for (i=0;i<n;i++) {
 		a->data[i] = tmp[i];
+		arena_addref(&A->arena, tmp[i]);
 	}
 	int id = tuple_new(&A->tuple, a);
 	tuple_hash_insert(&A->tuple_l, hash, id);
