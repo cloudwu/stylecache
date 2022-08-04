@@ -425,6 +425,12 @@ style_dump(struct style_cache *C) {
 	combined_cache_dump(&C->cache);
 }
 
+void
+style_check(struct style_cache *C) {
+	combined_cache_check(&C->cache);
+}
+
+
 #ifdef STYLE_TEST_MAIN
 
 #define STR(s) s, sizeof(s"")
@@ -470,6 +476,9 @@ main() {
 	style_handle_t h2 = style_create(C, sizeof(b)/sizeof(b[0]), b);
 
 	style_dump(C);
+
+	style_check(C);
+
 
 	printf("h1 = %" PRIx64 ", h2 = %" PRIx64 "\n", h1.idx, h2.idx);
 

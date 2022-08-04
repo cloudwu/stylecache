@@ -323,4 +323,21 @@ combined_cache_new(struct combined_cache *c, uint64_t a, uint64_t b, int mask, u
 	return id;
 }
 
+static void
+combined_cache_check(struct combined_cache *C) {
+	int i;
+	int index = C->head;
+	for (i=0;i<COMBINE_CACHE_SIZE-1;i++) {
+		struct combined_node *node = &C->queue[index];
+		int h = cache_hash_combined_(node->a, node->b);
+		struct combined_node *c = lookup_combined_(C, h, node->a, node->b);
+		struct combined_node *v = cache_find_(C, node->id);
+		assert(c == v);
+		assert(node == c || c == NULL);
+
+		index = next_list_(node->list);
+	}
+	assert(index == C->tail);
+}
+
 #endif

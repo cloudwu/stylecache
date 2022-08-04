@@ -32,5 +32,6 @@ void style_flush(struct style_cache *);	// must call flush before style_eval and
 int style_eval(struct style_cache *, style_handle_t);
 void* style_find(struct style_cache *, int attrib, uint8_t key);
 void* style_index(struct style_cache *, int attrib, int i, uint8_t *key);
+void style_check(struct style_cache *);
 
 #endif
