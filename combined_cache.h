@@ -135,7 +135,7 @@ lookup_combined_(struct combined_cache *c, int hash, uint64_t a, uint64_t b) {
 }
 
 static struct combined_node *
-combined_cache_find_notouch(struct combined_cache *c, uint64_t id) {
+cache_find_(struct combined_cache *c, uint64_t id) {
 	int hash = cache_hash_id_(id);
 	int i;
 	struct combined_node *n;
@@ -159,7 +159,7 @@ combined_cache_find_notouch(struct combined_cache *c, uint64_t id) {
 	return NULL;
 }
 
-static inline void
+static void
 cache_touch_(struct combined_cache *c, struct combined_node *node) {
 	int slot = node - c->queue;
 	if (slot == c->head)
@@ -191,9 +191,9 @@ cache_touch_(struct combined_cache *c, struct combined_node *node) {
 }
 
 static struct combined_node *
-combined_cache_find(struct combined_cache *c, uint64_t id) {
-	struct combined_node * n = combined_cache_find_notouch(c, id);
-	if (n) {
+combined_cache_find(struct combined_cache *c, uint64_t id, int touch) {
+	struct combined_node * n = cache_find_(c, id);
+	if (n && touch) {
 		cache_touch_(c, n);
 	}
 	return n;
@@ -323,7 +323,7 @@ combined_cache_check(struct combined_cache *C) {
 		struct combined_node *node = &C->queue[index];
 		int h = cache_hash_combined_(node->a, node->b);
 		struct combined_node *c = lookup_combined_(C, h, node->a, node->b);
-		struct combined_node *v = combined_cache_find_notouch(C, node->id);
+		struct combined_node *v = combined_cache_find(C, node->id, 0);
 		assert(c == v);
 		assert(node == c || c == NULL);
 

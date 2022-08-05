@@ -281,7 +281,7 @@ style_release(struct style_cache *C, style_handle_t s) {
 }
 
 static int
-eval_(struct style_cache *C, uint64_t handle) {
+eval_(struct style_cache *C, uint64_t handle, int touch) {
 	if (DATA_NODE(handle)) {
 		int index = find_by_id(C, handle);
 		if (index < 0)
@@ -290,7 +290,8 @@ eval_(struct style_cache *C, uint64_t handle) {
 		return d->data.idx;
 	}
 
-	struct combined_node *node = combined_cache_find(&C->cache, handle);
+	struct combined_node *node = combined_cache_find(&C->cache, handle, touch);
+
 	if (node == NULL) {
 		return -1;
 	}
@@ -299,10 +300,10 @@ eval_(struct style_cache *C, uint64_t handle) {
 	}
 
 	// transform node
-	int child_id = eval_(C, node->a);
+	int child_id = eval_(C, node->a, 0);
 	if (child_id < 0)
 		return -1;
-	int parent_id = eval_(C, node->b);
+	int parent_id = eval_(C, node->b, 0);
 	if (parent_id < 0)
 		return -1;
 
@@ -319,7 +320,7 @@ style_handle_t
 style_clone(struct style_cache *C, style_handle_t s) {
 	if (s.idx == 0)
 		return STYLE_NULL;
-	int a = eval_(C, s.idx);
+	int a = style_eval(C, s);
 	if (a < 0)
 		return STYLE_NULL;
 	attrib_t attr = {a};
@@ -347,7 +348,7 @@ check_handle_dirty(struct style_cache *C, uint64_t handle) {
 		struct style_data *d = &C->arena.h[index];
 		return d->dirty;
 	} else {
-		struct combined_node *node = combined_cache_find_notouch(&C->cache, handle);
+		struct combined_node *node = combined_cache_find(&C->cache, handle, 0);
 		if (node == NULL) {
 			return 1;
 		}
@@ -393,7 +394,7 @@ style_inherit(struct style_cache *C, style_handle_t child, style_handle_t parent
 
 int
 style_eval(struct style_cache *C, style_handle_t handle) {
-	return eval_(C, handle.idx);
+	return eval_(C, handle.idx, 1);
 }
 
 void*
