@@ -346,7 +346,7 @@ check_handle_dirty(struct style_cache *C, uint64_t handle) {
 		struct style_data *d = &C->arena.h[index];
 		return d->dirty;
 	} else {
-		struct combined_node *node = combined_cache_find(&C->cache, handle);
+		struct combined_node *node = combined_cache_find_notouch(&C->cache, handle);
 		if (node == NULL) {
 			return 1;
 		}
