@@ -1,5 +1,6 @@
 #include "attrib.h"
 #include "hash.h"
+#include "inherit_cache.h"
 #include <stdint.h>
 #include <stdlib.h>
 #include <assert.h>
@@ -88,31 +89,6 @@ struct attrib_tuple_lookup {
 	struct attrib_tuple_hash_entry *e;
 };
 
-#define INHERIT_ID_MAX (1<<20)
-#define INHERIT_CACHE_SIZE (1<<13)// 8192, 13bits
-#define INHERIT_CACHE_SHIFT (32-13)
-#define INHERIT_MAX_COUNT ((1<<11)-1)
-
-// 64bits
-struct inherit_entry {
-	uint64_t a : 20;
-	uint64_t b : 20;
-	uint64_t result : 20;
-	uint64_t withmask : 1;
-	uint64_t valid : 1;
-};
-
-struct inherit_key {
-	uint32_t key : 20;
-	uint32_t count : 11;
-	uint32_t valid : 1;
-};
-
-struct inherit_cache {
-	struct inherit_entry s[INHERIT_CACHE_SIZE];
-	struct inherit_key key[INHERIT_CACHE_SIZE];
-};
-
 struct delay_removed {
 	int head;
 	int tail;
@@ -155,129 +131,6 @@ static void
 delay_remove_init(struct delay_removed *r) {
 	r->head = 0;
 	r->tail = 0;
-}
-
-static void
-inherit_cache_init(struct inherit_cache *c) {
-	memset(c, 0, sizeof(*c));
-}
-
-static inline int
-hash_inherit_key_slot(int a) {
-	uint32_t v = (uint32_t)a;
-	v = int32_hash(v) >> INHERIT_CACHE_SHIFT;
-	return v;
-}
-
-static inline int
-inherit_cache_key_valid(struct inherit_cache *c, int a) {
-	if (a >= INHERIT_ID_MAX)
-		return 0;
-	struct inherit_key *k = &c->key[hash_inherit_key_slot(a)];
-	if (k->key != a)
-		return 0;
-	if (k->count == 0 || !k->valid)
-		return 0;
-
-	return 1;
-}
-
-static inline int
-hash_inherit_combined_slot(int a, int b) {
-	uint32_t v = (a & 0xffff) | ((b & 0xffff) << 16);
-	v = int32_hash(v) >> INHERIT_CACHE_SHIFT;
-	return (int)v;
-}
-
-static int
-inherit_cache_fetch(struct inherit_cache *c, int a, int b, int withmask) {
-	if (!inherit_cache_key_valid(c, a) || !inherit_cache_key_valid(c, a))
-		return -1;
-	int v = hash_inherit_combined_slot(a,b);
-	struct inherit_entry *e = &c->s[v];
-	if (e->valid && e->a == a && e->b == b && e->withmask == withmask)
-		return e->result;
-	return -1;
-}
-
-static inline void
-unset_key(struct inherit_cache *c, int a) {
-	struct inherit_key *k = &c->key[hash_inherit_key_slot(a)];
-	assert(k->key == a && k->count >0);
-	--k->count;
-}
-
-static inline int
-set_key(struct inherit_cache *c, int key) {
-	struct inherit_key *k = &c->key[hash_inherit_key_slot(key)];
-	if (!k->valid) {
-		if (k->count > 0) {
-			// clear entries with key
-			int i;
-			for (i=0;i<INHERIT_CACHE_SIZE;i++) {
-				struct inherit_entry *e = &c->s[i];
-				if (e->valid && (e->a == key || e->b == key || e->result == key)) {
-					e->valid = 0;
-					unset_key(c, e->a);
-					unset_key(c, e->b);
-					unset_key(c, e->result);
-				}
-			}
-		}
-		k->key = key;
-		k->count = 1;
-		k->valid = 1;
-		return 1;	// succ
-	} else {
-		if (k->key != key)
-			return 0;	// fail
-		if (k->count >= INHERIT_MAX_COUNT)
-			return 0;	// too many, fail
-		++k->count;
-		return 1;
-	}
-}
-
-static inline void
-inherit_cache_retirekey(struct inherit_cache *c, int key) {
-	struct inherit_key *k = &c->key[hash_inherit_key_slot(key)];
-	if (k->key == key) {
-		k->valid = 0;
-	}
-}
-
-// Cache a,b and result in inherit_cache
-// If cache failed, don't set keys in inherit_cache, otherwise, addref in it.
-static void
-inherit_cache_set(struct inherit_cache *c, int a, int b, int withmask, int result) {
-	int v = hash_inherit_combined_slot(a,b);
-	struct inherit_entry *e = &c->s[v];
-	if (e->valid) {
-		unset_key(c, e->a);
-		unset_key(c, e->b);
-		unset_key(c, e->result);
-		e->valid = 0;
-	}
-	e->a = a;
-	e->b = b;
-	e->result = result;
-	e->withmask = withmask;
-
-	if (!set_key(c, a))
-		return;
-
-	if (!set_key(c, b)) {
-		unset_key(c, a);
-		return;
-	}
-
-	if (!set_key(c, result)) {
-		unset_key(c, a);
-		unset_key(c, b);
-		return;
-	}
-
-	e->valid = 1;
 }
 
 static size_t
@@ -740,7 +593,7 @@ attrib_hash_lookup(struct attrib_lookup *h, uint32_t hash, int *n) {
 
 
 struct attrib_state *
-attrib_newstate(const unsigned char *inherit_mask) {
+attrib_newstate(const unsigned char inherit_mask[128]) {
 	struct attrib_state *A = (struct attrib_state *)malloc(sizeof(*A));
 	arena_init(&A->arena);
 	hash_init(&A->arena_l);
@@ -765,6 +618,7 @@ attrib_close(struct attrib_state *A) {
 	hash_deinit(&A->arena_l);
 	tuple_deinit(&A->tuple);
 	tuple_hash_deinit(&A->tuple_l);
+	inherit_cache_deinit(&A->icache);
 	free(A);
 }
 

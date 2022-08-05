@@ -2,6 +2,7 @@
 #define attrib_state_h
 
 #include <stdint.h>
+#include <stddef.h>
 
 struct attrib_state;
 typedef struct { int idx; } attrib_t;

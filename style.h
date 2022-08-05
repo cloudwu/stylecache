@@ -2,6 +2,7 @@
 #define style_cache_h
 
 #include <stdint.h>
+#include <stddef.h>
 
 struct style_cache;
 typedef struct { uint64_t idx; } style_handle_t;
