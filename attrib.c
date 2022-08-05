@@ -1,6 +1,7 @@
 #include "attrib.h"
 #include "hash.h"
 #include "inherit_cache.h"
+#include "intern_cache.h"
 #include <stdint.h>
 #include <stdlib.h>
 #include <assert.h>
@@ -8,14 +9,11 @@
 #include <stdlib.h>
 #include <stdio.h>
 
-#define DEFAULT_ATTRIB_ARENA_SIZE 128
-#define DEFAULT_TUPLE_SIZE 128
-#define ATTRIB_ARRAY_STACK_SIZE 64
+#define DEFAULT_ATTRIB_ARENA_BITS 7
+#define DEFAULT_ATTRIB_ARENA_SIZE (1 << DEFAULT_ATTRIB_ARENA_BITS)
+#define DEFAULT_TUPLE_BITS 7
+#define DEFAULT_TUPLE_SIZE (1 << DEFAULT_TUPLE_BITS)
 #define EMBED_VALUE_SIZE 8
-#define EMBED_HASH_SLOT 7
-#define HASH_STEP 5
-#define HASH_INIT_BITS 7
-#define HASH_MAXSTEP 5
 #define MAX_KEY 128
 #define DELAY_REMOVE 4096
 
@@ -43,20 +41,6 @@ struct attrib_arena {
 	struct attrib_kv *e;
 };
 
-// { -1, 0 } : empty
-// { -1, n } : extra array of n
-// { index, ... , -1 }
-struct attrib_hash_entry {
-	uint32_t hash;
-	int index[EMBED_HASH_SLOT];
-};
-
-struct attrib_lookup {
-	int n;
-	int shift;
-	struct attrib_hash_entry *e;
-};
-
 struct attrib_array {
 	int refcount;
 	int n;
@@ -76,19 +60,6 @@ struct attrib_tuple {
 	union attrib_tuple_entry *s;
 };
 
-// hash 0 is invalid slot
-// index -1 is removed slot
-struct attrib_tuple_hash_entry {
-	uint32_t hash;
-	int index;
-};
-
-struct attrib_tuple_lookup {
-	int n;
-	int shift;
-	struct attrib_tuple_hash_entry *e;
-};
-
 struct delay_removed {
 	int head;
 	int tail;
@@ -97,9 +68,9 @@ struct delay_removed {
 
 struct attrib_state {
 	struct attrib_arena arena;
-	struct attrib_lookup arena_l;
+	struct intern_cache arena_i;
 	struct attrib_tuple tuple;
-	struct attrib_tuple_lookup tuple_l;
+	struct intern_cache tuple_i;
 	struct inherit_cache icache;
 	struct delay_removed kv_removed;
 	struct delay_removed tuple_removed;
@@ -146,35 +117,8 @@ arena_size(struct attrib_arena *arena) {
 }
 
 static size_t
-arena_l_size(struct attrib_lookup *h) {
-	size_t sz = h->n * sizeof(struct attrib_hash_entry);
-	int i;
-	for (i=0;i<h->n;i++) {
-		struct attrib_hash_entry * e = &h->e[i];
-		if (e->index[0] == -1) {
-			int n = e->index[1];
-			if (n > 0) {
-				sz += sizeof(int) * n;
-			}
-		}
-	}
-	return sz;
-}
-
-static size_t
-tuple_size(struct attrib_state *A) {
-	struct attrib_tuple *tuple = &A->tuple;
+tuple_size(struct attrib_tuple *tuple) {
 	size_t sz = tuple->cap * sizeof(union attrib_tuple_entry);
-	struct attrib_tuple_lookup *h = &A->tuple_l;
-	sz += h->n * sizeof(struct attrib_tuple_hash_entry);
-	int i;
-	for (i=0;i<h->n;i++) {
-		struct attrib_tuple_hash_entry *e = &h->e[i];
-		if (e->hash != 0 && e->index >= 0) {
-			struct attrib_array *a = tuple->s[e->index].a;
-			sz += sizeof(*a) + a->n * sizeof(int) - sizeof(int);
-		}
-	}
 	return sz;
 }
 
@@ -182,24 +126,10 @@ size_t
 attrib_memsize(struct attrib_state *A) {
 	size_t sz = sizeof(*A);
 	sz += arena_size(&A->arena);
-	sz += arena_l_size(&A->arena_l);
-	sz += tuple_size(A);
+	sz += tuple_size(&A->tuple);
+	sz += intern_cache_memsize(&A->arena_i);
+	sz += intern_cache_memsize(&A->tuple_i);
 	return sz;
-}
-
-static inline int *
-hashvalue_ptr(struct attrib_hash_entry *e) {
-	if (e->index[0] == -1) {
-		if (e->index[1] == -1)
-			return NULL;	// invalid entry
-		else {
-			int *ret;
-			memcpy(&ret, &e->index[2], sizeof(int *));
-			return ret;
-		}
-	} else {
-		return e->index;
-	}
 }
 
 static void
@@ -312,296 +242,16 @@ arena_create(struct attrib_arena *arena, int key, void *value, size_t sz, uint32
 	return index;
 }
 
-static void
-init_slots(struct attrib_lookup *h, int bits) {
-	int n = 1 << bits;
-	h->e = (struct attrib_hash_entry *)malloc(n * sizeof(struct attrib_hash_entry));
-	h->n = n;
-	h->shift = 32 - bits;
-	int i;
-	for (i=0;i<n;i++) {
-		// set invalid
-		h->e[i].index[0] = -1;
-		h->e[i].index[1] = -1;
-	}
-}
-
-static void
-hash_init(struct attrib_lookup *h) {
-	init_slots(h, HASH_INIT_BITS);
-}
-
-static void
-free_entry(struct attrib_hash_entry *e, int n) {
-	int i;
-	for (i=0;i<n;i++) {
-		int *p = hashvalue_ptr(&e[i]);
-		if (p && p != e[i].index) {
-			free(p);
-		}
-	}
-	free(e);
-}
-
-static void
-hash_deinit(struct attrib_lookup *h) {
-	free_entry(h->e, h->n);
-}
-
-static void
-init_tuple_lut_slots(struct attrib_tuple_lookup *lut, int bits) {
-	int n = 1 << bits;
-	lut->e = (struct attrib_tuple_hash_entry *)malloc(n * sizeof(struct attrib_tuple_hash_entry));
-	lut->n = n;
-	lut->shift = 32 - bits;
-	int i;
-	for (i=0;i<n;i++) {
-		// set invalid
-		lut->e[i].hash = 0;
-	}
-}
-
-static int
-check_tuple(struct attrib_state *A, int index, int n, const int a[]) {
-	struct attrib_array *array = A->tuple.s[index].a;
-	if (n != array->n)
-		return 0;
-	return memcmp(a, array->data, n * sizeof(int)) == 0;
-}
-
-static int
-tuple_hash_find(struct attrib_state *A, uint32_t hash, int n, const int a[]) {
-	struct attrib_tuple_lookup *h = &A->tuple_l;
-	int slot = hash_mainslot(hash, h);
-	struct attrib_tuple_hash_entry *e = &h->e[slot];
-	if (e->hash == 0)
-		return -1;
-	if (e->hash == hash && e->index != -1) {
-		if (check_tuple(A, e->index, n, a))
-			return e->index;
-	}
-	int i;
-	for (i=0;i<HASH_MAXSTEP;i++) {
-		slot += HASH_STEP;
-		if (slot >= h->n)
-			slot -= h->n;
-		e = &h->e[slot];
-		if (e->hash == 0)
-			return -1;
-		if (e->hash == hash && e->index != -1) {
-			if (check_tuple(A, e->index, n, a))
-				return e->index;
-		}
-	}
-	return -1;
-}
-
-static void
-tuple_hash_insert(struct attrib_tuple_lookup *h, uint32_t hash, int index) {
-	int slot = hash_mainslot(hash, h);
-	int i;
-	for (i=0;i<HASH_MAXSTEP;i++) {
-		struct attrib_tuple_hash_entry *e = &h->e[slot];
-		if (e->hash == 0 || e->index == -1) {
-			e->hash = hash;
-			e->index = index;
-			return;
-		}
-		slot += HASH_STEP;
-		if (slot >= h->n)
-			slot -= h->n;
-	}
-	// rehash
-	struct attrib_tuple_hash_entry *e = h->e;
-	int n = h->n;
-	int bits = 32 - h->shift;
-
-	init_tuple_lut_slots(h, bits+1);
-	for (i=0;i<n;i++) {
-		if (e[i].hash != 0 && e[i].index >= 0) {
-			tuple_hash_insert(h, e[i].hash, e[i].index);
-		}
-	}
-	free(e);
-	tuple_hash_insert(h, hash, index);
-}
-
-static void
-tuple_hash_remove(struct attrib_tuple_lookup *h, uint32_t hash, int index) {
-	int slot = hash_mainslot(hash, h);
-	for (;;) {
-		struct attrib_tuple_hash_entry *e = &h->e[slot];
-		if (e->hash == hash && e->index == index) {
-			e->index = -1;
-			return;
-		}
-		assert(e->hash != 0);
-		slot += HASH_STEP;
-		if (slot >= h->n)
-			slot -= h->n;
-	}
-}
-
-static void
-tuple_hash_init(struct attrib_tuple_lookup *lut) {
-	init_tuple_lut_slots(lut, HASH_INIT_BITS);
-}
-
-static void
-tuple_hash_deinit(struct attrib_tuple_lookup *lut) {
-	free(lut->e);
-}
-
-// extra space 
-// [0] : -1
-// [1] : n
-// [2/3] : pointer (64bits)
-static int *
-expand_extraspace(struct attrib_hash_entry * e) {
-	int *extra;
-	if (e->index[0] == -1) {
-		int n = e->index[1];
-		extra = hashvalue_ptr(e);
-		int newcap = n * 3 / 2;
-		extra = (int *)realloc(extra, newcap * sizeof(int));
-		e->index[1] = newcap;
-	} else {
-		extra = (int *)malloc(sizeof(int) * (EMBED_HASH_SLOT + 1));
-		memcpy(extra, e->index, EMBED_HASH_SLOT * sizeof(int));
-		e->index[0] = -1;
-		e->index[1] = EMBED_HASH_SLOT + 1;
-	}
-	memcpy(&e->index[2], &extra, sizeof(extra));
-	return extra;
-}
-
-static struct attrib_hash_entry * find_slot(struct attrib_lookup *h, uint32_t hash);
-static void attrib_hash_insert(struct attrib_lookup *h, uint32_t hash, int index);
-
-static void
-rehash(struct attrib_lookup *h) {
-	struct attrib_hash_entry *e = h->e;
-	int n = h->n;
-	int bits = 32 - h->shift;
-	init_slots(h, bits + 1);
-	int i,j;
-	for (i=0;i<n;i++) {
-		int * p = hashvalue_ptr(&e[i]);
-		if (p) {
-			int size = (p == e[i].index) ? EMBED_HASH_SLOT : e[i].index[1];
-			for (j=0;j<size && p[j] >= 0;j++) {
-				attrib_hash_insert(h, e[i].hash, p[j]);
-			}
-		}
-	}
-	free_entry(e, n);
-}
-
-static struct attrib_hash_entry *
-find_nextslot(struct attrib_lookup *h, uint32_t hash) {
-	int i;
-	int index = hash_mainslot(hash, h);
-	for (i=0;i<HASH_MAXSTEP;i++) {
-		index += HASH_STEP;
-		if (index >= h->n)
-			index -= h->n;
-		struct attrib_hash_entry * e = &h->e[index];
-		if (e->hash == hash || hashvalue_ptr(e) == NULL)
-			return e;
-	}
-	rehash(h);
-
-	return find_slot(h, hash);
-}
-
-static struct attrib_hash_entry *
-find_slot(struct attrib_lookup *h, uint32_t hash) {
-	int mainslot = hash_mainslot(hash, h);
-	struct attrib_hash_entry * e = &h->e[mainslot];
-	if (e->hash == hash || hashvalue_ptr(e) == NULL)
-		return e;
-	return find_nextslot(h, hash);
-}
-
-static void
-attrib_hash_insert(struct attrib_lookup *h, uint32_t hash, int index) {
-	assert(index >= 0);
-	struct attrib_hash_entry * e = find_slot(h, hash);
-	int * v = hashvalue_ptr(e);
-	if (v == NULL) {
-		e->hash = hash;
-		e->index[0] = index;
-		e->index[1] = -1;
-		return;
-	}
-	if (e->hash != hash) {
-		e = find_nextslot(h, hash);	// may rehash
-	}
-	int n = EMBED_HASH_SLOT;
-	if (v != e->index) {
-		// extra space
-		n = e->index[1];
-	}
-	int i;
-	for (i=0;i < n && v[i] != -1;i++) {
-		if (v[i] == index)
-			return;
-	}
-	if (i < n) {
-		v[i] = index;
-		if (i < n - 1) {
-			v[i+1] = -1;
-		}
-	} else {
-		v = expand_extraspace(e);
-		v[n] = index;
-		v[n+1] = -1;
-	}
-}
-
-static void
-attrib_hash_remove(struct attrib_lookup *h, uint32_t hash, int index) {
-	assert(index >= 0);
-	struct attrib_hash_entry * e = find_slot(h, hash);
-	int * v = hashvalue_ptr(e);
-	assert(v != NULL);
-	int n = (v == e->index) ? EMBED_HASH_SLOT : e->index[1];
-	int i;
-	int removed = -1;
-	for (i=0;i<n;i++) {
-		if (v[i] == -1) {
-			break;
-		}
-		if (v[i] == index)
-			removed = i;
-	}
-	assert(removed >= 0);
-	int last = i - 1;
-	v[removed] = v[last];
-	v[last] = -1;
-}
-
-static int *
-attrib_hash_lookup(struct attrib_lookup *h, uint32_t hash, int *n) {
-	struct attrib_hash_entry * e = find_slot(h, hash);
-	int * v = hashvalue_ptr(e);
-	if (v == NULL)
-		return NULL;
-	*n = (v == e->index) ? EMBED_HASH_SLOT : e->index[1];
-	return v;
-}
-
-
 struct attrib_state *
 attrib_newstate(const unsigned char inherit_mask[128]) {
 	struct attrib_state *A = (struct attrib_state *)malloc(sizeof(*A));
 	arena_init(&A->arena);
-	hash_init(&A->arena_l);
 	tuple_init(&A->tuple);
-	tuple_hash_init(&A->tuple_l);
 	inherit_cache_init(&A->icache);
 	delay_remove_init(&A->kv_removed);
 	delay_remove_init(&A->tuple_removed);
+	intern_cache_init(&A->arena_i, DEFAULT_ATTRIB_ARENA_BITS);
+	intern_cache_init(&A->tuple_i, DEFAULT_TUPLE_BITS);
 
 	if (inherit_mask == NULL) {
 		memset(A->inherit_mask,1,sizeof(A->inherit_mask));
@@ -615,45 +265,44 @@ attrib_newstate(const unsigned char inherit_mask[128]) {
 void
 attrib_close(struct attrib_state *A) {
 	arena_deinit(&A->arena);
-	hash_deinit(&A->arena_l);
 	tuple_deinit(&A->tuple);
-	tuple_hash_deinit(&A->tuple_l);
 	inherit_cache_deinit(&A->icache);
+	intern_cache_deinit(&A->arena_i);
+	intern_cache_deinit(&A->tuple_i);
 	free(A);
 }
+
+static uint32_t
+attrib_kv_hash_(uint32_t index, void *a) {
+	struct attrib_kv *e = (struct attrib_kv *)a;
+	return e[index].hash;
+}
+
+#define ATTRIB_KV_HASH(A) attrib_kv_hash_, A->arena.e
 
 int
 attrib_entryid(struct attrib_state *A, int key, void *ptr, size_t sz) {
 	uint32_t hash = kv_hash(key, ptr, sz);
-	int n;
-	int new_index;
-	int *index = attrib_hash_lookup(&A->arena_l, hash, &n);
-	if (index == NULL) {
-		// new entry
-		new_index = arena_create(&A->arena, key, ptr, sz, hash);
-		attrib_hash_insert(&A->arena_l, hash, new_index);
-	} else {
-		int i;
-		for (i=0;i<n && index[i]>=0;i++) {
-			struct attrib_kv *kv = &A->arena.e[index[i]];
-			if (kv->blob) {
-				if (kv->v.ptr->sz == sz && memcmp(ptr, kv->v.ptr->data, sz) == 0) {
-					return index[i];
+	struct intern_cache_iterator iter;
+	if (intern_cache_find(&A->arena_i, hash, &iter, ATTRIB_KV_HASH(A))) {
+		do {
+			struct attrib_kv *kv = &A->arena.e[iter.result];
+			if (kv->k == key) {
+				if (kv->blob) {
+					if (kv->v.ptr->sz == sz && memcmp(ptr, kv->v.ptr->data, sz) == 0) {
+						return iter.result;
+					}
+				} else {
+					if (sz <= EMBED_VALUE_SIZE && memcmp(ptr, kv->v.buffer, sz) == 0) {
+						return iter.result;
+					}
 				}
-			} else if (sz <= EMBED_VALUE_SIZE && memcmp(ptr, kv->v.buffer, sz) == 0) {
-				return index[i];
 			}
-		}
-		new_index = arena_create(&A->arena, key, ptr, sz, hash);
-		if (i==n) {
-			attrib_hash_insert(&A->arena_l, hash, new_index);
-		} else {
-			index[i] = new_index;
-			if (i+1 < n) {
-				index[i+1] = -1;
-			}
-		}
+		} while (itern_cache_find_next(&A->arena_i, &iter,  ATTRIB_KV_HASH(A)));
 	}
+	// new entry
+	int	new_index = arena_create(&A->arena, key, ptr, sz, hash);
+	intern_cache_insert(&A->arena_i, new_index, ATTRIB_KV_HASH(A));
 	return new_index;
 }
 
@@ -680,7 +329,7 @@ arena_release(struct attrib_state *A, int id) {
 		if (removed_index >= 0) {
 			kv = &arena->e[removed_index];
 			if (--kv->refcount == 0) {
-				attrib_hash_remove(&A->arena_l, kv->hash, removed_index);
+				itern_cache_remove(&A->arena_i, id,  ATTRIB_KV_HASH(A));
 				if (kv->blob) {
 					free(kv->v.ptr);
 					kv->blob = 0;
@@ -739,6 +388,28 @@ attrib_addref(struct attrib_state *A, attrib_t handle) {
 	return addref(A, handle);
 }
 
+static uint32_t
+tuple_hash_(uint32_t index, void *t) {
+	union attrib_tuple_entry *e = (union attrib_tuple_entry *)t;
+	return e[index].a->hash;
+}
+
+#define TUPLE_HASH(A) tuple_hash_, A->tuple.s
+
+static int
+tuple_hash_find(struct attrib_state *A, uint32_t hash, int n, int *buf) {
+	struct intern_cache_iterator iter;
+	if (intern_cache_find(&A->tuple_i, hash, &iter, TUPLE_HASH(A))) {
+		do {
+			struct attrib_array *a = A->tuple.s[iter.result].a;
+			if (n == a->n && memcmp(buf, a->data, n * sizeof(int)) == 0) {
+				return iter.result;
+			}
+		} while (itern_cache_find_next(&A->tuple_i, &iter, TUPLE_HASH(A)));
+	}
+	return -1;
+}
+
 attrib_t
 attrib_create(struct attrib_state *A, int n, const int e[]) {
 	int tmp[MAX_KEY];
@@ -754,6 +425,7 @@ attrib_create(struct attrib_state *A, int n, const int e[]) {
 		n = index;
 	}
 	uint32_t hash = array_hash(tmp, n);
+
 	int index = tuple_hash_find(A, hash, n, tmp);
 	if (index >= 0) {
 		attrib_t ret = { index };
@@ -766,7 +438,9 @@ attrib_create(struct attrib_state *A, int n, const int e[]) {
 		arena_addref(&A->arena, tmp[i]);
 	}
 	int id = tuple_new(&A->tuple, a);
-	tuple_hash_insert(&A->tuple_l, hash, id);
+
+	intern_cache_insert(&A->tuple_i, id, TUPLE_HASH(A));
+
 	attrib_t ret = { id };
 	return ret;
 }
@@ -780,7 +454,7 @@ delete_tuple(struct attrib_state *A, int index) {
 	for (i=0;i<a->n;i++) {
 		arena_release(A, a->data[i]);
 	}
-	tuple_hash_remove(&A->tuple_l, a->hash, index);
+	itern_cache_remove(&A->tuple_i, index, TUPLE_HASH(A));
 	tuple_delete(&A->tuple, index);
 
 	inherit_cache_retirekey(&A->icache, index);
