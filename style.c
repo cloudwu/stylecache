@@ -1,93 +1,62 @@
 #include "style.h"
 #include "attrib.h"
-#include "hash.h"
-#include "combined_cache.h"
 
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 #include <assert.h>
 #include <stdio.h>
-#include <inttypes.h>
 
-#define ARENA_DEFAULT_BITS 10
-#define HASH_STEP 5
-#define HASH_MAXSTEP 5
+#define INVALID_NODE (~0)
+#define ARENA_DEFAULT_SIZE 1024
+
 #define MAX_KEY 128
 
-#define DATA_NODE(handle) (((handle) & 1) == 0)
-
-struct style_combine {
-	uint64_t a;
-	uint64_t b;
-};
-
-struct style_data {
-	uint64_t id;
-	attrib_t data;
-	uint8_t removed;
-	uint8_t dirty;
-};
-
-struct style_arena {
-	struct style_data *h;
-	int *dirty;
-	int n;
-	int shift;
-	int dirty_n;
+// Every styles created in current frame are linked in .prev/.next
+// freelist linked in .next
+// If the style is A * B, put style in A.affect_left, or in the .next_left list of A.affect_left
+// and put style in A.affect_right, or in the .next_right list of B.affect_right
+struct style {
+	int a;
+	int b;
+	attrib_t value;
+	int prev;
+	int next;
+	int next_left;
+	int next_right;
+	int affect_left;
+	int affect_right;
+	int refcount:31;
+	int withmask:1;
 };
 
 struct style_cache {
-	struct style_arena arena;
 	struct attrib_state *A;
-	struct combined_cache cache;
-	uint64_t lastid;
+	struct style *s;
+	int n;
+	int cap;
+	int freelist;
+	int live;
+	int dead;
 	unsigned char mask[MAX_KEY];
 };
-
-static inline uint64_t
-new_id(struct style_cache *c) {
-	c->lastid += 2;
-	return c->lastid;
-}
-
-static void
-style_arena_init(struct style_arena *arena, int bits) {
-	int n = 1 << bits;
-	arena->shift = 32 - bits;
-	arena->n = n;
-	arena->h = (struct style_data *)malloc(n * sizeof(struct style_data));
-	arena->dirty = (int *)malloc(n * sizeof(int));
-	arena->dirty_n = 0;
-	int i;
-	for (i=0;i<n;i++) {
-		arena->h[i].id = 0;
-	}
-}
-
-static void
-style_arena_deinit(struct style_arena *arena) {
-	free(arena->h);
-}
-
-static size_t
-style_arena_memsize(struct style_arena *arena) {
-	return (sizeof(struct style_data) + sizeof(int)) * arena->n;
-}
 
 struct style_cache *
 style_newcache(const unsigned char inherit_mask[128]) {
 	struct style_cache * c = (struct style_cache *)malloc(sizeof(*c));
-	c->lastid = 0;
-	style_arena_init(&c->arena, ARENA_DEFAULT_BITS);
-	combined_cache_init(&c->cache);
 	c->A = attrib_newstate(inherit_mask);
+	c->s = (struct style *)malloc(ARENA_DEFAULT_SIZE * sizeof(struct style));
+	c->n = 0;
+	c->cap = ARENA_DEFAULT_SIZE;
+	c->freelist = -1;
+	c->live = -1;
+	c->dead = -1;
 	return c;
 }
 
 void
 style_deletecache(struct style_cache *c) {
-	style_arena_deinit(&c->arena);
+	free(c->s);
 	attrib_close(c->A);
 	free(c);
 }
@@ -95,95 +64,54 @@ style_deletecache(struct style_cache *c) {
 size_t
 style_memsize(struct style_cache *C) {
 	size_t sz = sizeof(*C);
-	sz += style_arena_memsize(&C->arena);
+	sz += C->cap * sizeof(struct style);
 	sz += attrib_memsize(C->A);
 
 	return sz;
 }
 
 static int
-insert_id(struct style_arena *arena, uint64_t id, attrib_t attr) {
-	int slot = hash_mainslot(id64_hash(id), arena);
-	int i;
-	for (i=0;i<HASH_MAXSTEP;i++) {
-		struct style_data *d = &arena->h[slot];
-		if (d->id == 0 || d->removed) {
-			d->id = id;
-			d->removed = 0;
-			d->dirty = 0;
-			d->data = attr;
-			return slot;
-		}
-		slot += HASH_STEP;
-		if (slot >= arena->n)
-			slot -= arena->n;
+alloc_style(struct style_cache *c) {
+	if (c->freelist >= 0) {
+		int r = c->freelist;
+		struct style *s = &c->s[r];
+		c->freelist = s->next;
+		return r;
 	}
-	// rehash
-
-	int n = arena->n;
-	struct style_data *data = arena->h;
-	int dirty_n = arena->dirty_n;
-	int *dirty = arena->dirty;
-	int bits = 32 - arena->shift;
-	style_arena_init(arena, bits+1);
-
-	for (i=0;i<n;i++) {
-		if (data[i].id != 0 && !data[i].removed) {
-			insert_id(arena, data[i].id, data[i].data);
-		}
+	if (c->n >= c->cap) {
+		int newcap = c->cap * 3 / 2;
+		c->s = (struct style *)realloc(c->s, newcap * sizeof(struct style));
+		c->cap = newcap;
 	}
-	for (i=0;i<dirty_n;i++) {
-		arena->dirty[i] = dirty[i];
-	}
-	arena->dirty_n = dirty_n;
-
-	free(data);
-	free(dirty);
-
-	return insert_id(arena, id, attr);
-}
-
-static int
-alloc_data(struct style_cache *c, attrib_t attr) {
-	uint64_t id = new_id(c);
-	return insert_id(&c->arena, id, attr);
+	return c->n++;
 }
 
 static void
-dealloc_data(struct style_cache *c, int index) {
-	struct style_arena *arena = &c->arena;
-	assert(index >= 0 && index < arena->n);
-	struct style_data *d = &c->arena.h[index];
-	assert(!d->removed);
-	d->removed = 1;
-	attrib_release(c->A, d->data);
-}
-
-static int
-find_by_id(struct style_cache *c, uint64_t id) {
-	struct style_arena *arena = &c->arena;
-	int slot = hash_mainslot(id64_hash(id), arena);
-	int i;
-	for (i=0;i<HASH_MAXSTEP;i++) {
-		struct style_data *d = &arena->h[slot];
-		if (d->id == 0) {
-			break;
-		}
-		if (d->id == id && !d->removed) {
-			return slot;
-		}
-		slot += HASH_STEP;
-		if (slot >= arena->n)
-			slot -= arena->n;
+link_to(struct style_cache *C, int id, int *node) {
+	struct style *s = &C->s[id];
+	s->prev = -1;
+	s->next = *node;
+	if (*node >= 0) {
+		struct style *last = &C->s[*node];
+		last->prev = id;
 	}
-	return -1;
+	*node = id;
 }
 
-static inline style_handle_t
-style_handle_from_attr(struct style_cache *C, attrib_t attr) {
-	int index = alloc_data(C, attr);
-	style_handle_t ret = { C->arena.h[index].id };
-	return ret;
+static void
+remove_from(struct style_cache *C, int id, int *node) {
+	struct style *s = &C->s[id];
+	if (s->next >= 0) {
+		struct style *n = &C->s[s->next];
+		n->prev = s->prev;
+	}
+	if (s->prev < 0) {
+		assert(*node == id);
+		*node = s->next;
+	} else {
+		struct style *p = &C->s[s->prev];
+		p->next = s->next;
+	}
 }
 
 style_handle_t
@@ -196,29 +124,78 @@ style_create(struct style_cache *C, int n, struct style_attrib a[]) {
 		tmp[i] = attrib_entryid(A, a[i].key, a[i].data, a[i].sz);
 	}
 	attrib_t attr = attrib_create(A, n, tmp);
-	return style_handle_from_attr(C, attr);
+	int id = alloc_style(C);
+	struct style *s = &C->s[id];
+	s->a = -1;
+	s->b = -1;
+	s->value = attr;
+	s->refcount = 1;
+
+	link_to(C, id, &C->live);
+
+	s->next_left = -1;
+	s->next_right = -1;
+	s->affect_left = -1;
+	s->affect_right = -1;
+
+	style_handle_t r = { id };
+	return r;
+}
+
+static inline struct style *
+get_style(struct style_cache *C, int index) {
+	assert(index >= 0 && index < C->n);
+	struct style * s = &C->s[index];
+	assert(s->refcount >= 0);
+	return s;
 }
 
 static void
-add_dirty(struct style_arena *arena, int index) {
-	int n = arena->dirty_n ++;
-	assert(n < arena->n);
-	arena->dirty[n] = index;
+make_dirty_tree(struct style_cache *C, int index) {
+	if (index < 0)
+		return;
+	struct style *s = get_style(C, index);
+	if (s->value.idx < 0) {
+		// already dirty
+		return;
+	}
+	attrib_release(C->A, s->value);
+	s->value.idx = -1;
+	make_dirty_tree(C, s->affect_left);	
+	make_dirty_tree(C, s->affect_right);
+	make_dirty_tree(C, s->next_left);
+	make_dirty_tree(C, s->next_right);
+}
+
+static void
+make_dirty(struct style_cache *C, struct style *s) {
+	make_dirty_tree(C, s->affect_left);
+	make_dirty_tree(C, s->affect_right);
+	assert(s->value.idx >= 0);
+}
+
+static inline int
+is_value(struct style_cache *C, struct style *s) {
+	return s->a < 0 && s->b < 0 && s->value.idx >= 0;
+}
+
+static inline int
+is_combination(struct style_cache *C, struct style *s) {
+	return s->a >= 0 && s->b >= 0;
 }
 
 int
-style_modify(struct style_cache *C, style_handle_t s, int patch_n, struct style_attrib patch[]) {
+style_modify(struct style_cache *C, style_handle_t h, int patch_n, struct style_attrib patch[]) {
 	struct attrib_state *A = C->A;
-	int index = find_by_id(C, s.idx);
-	assert(index >= 0);
-	struct style_data *d = &C->arena.h[index];
+	struct style *s = get_style(C, h.idx);
+	assert(is_value(C, s));
 	int tmp[MAX_KEY];
-	int n = attrib_get(A, d->data, tmp);
+	int n = attrib_get(A, s->value, tmp);
 	int i;
 	int removed = 0;
 	int change = 0;
 	for (i=0;i<patch_n;i++) {
-		int index = attrib_find(A, d->data, patch[i].key);
+		int index = attrib_find(A, s->value, patch[i].key);
 		if (index < 0) {
 			if (patch[i].data) {
 				// new
@@ -264,142 +241,113 @@ style_modify(struct style_cache *C, style_handle_t s, int patch_n, struct style_
 		}
 	}
 	attrib_t new_attr = attrib_create(A, n2, tmp);
-	if (!d->dirty) {
-		d->dirty = 1;
-		add_dirty(&C->arena, index);
-	}
-	attrib_release(A, d->data);
-	d->data = new_attr;
+	attrib_release(A, s->value);
+	s->value = new_attr;
+	make_dirty(C, s);
 	return 1;
 }
 
 void
-style_release(struct style_cache *C, style_handle_t s) {
-	int index = find_by_id(C, s.idx);
-	assert(index >= 0);
-	dealloc_data(C, index);
-}
-
-static int
-eval_(struct style_cache *C, uint64_t handle, int touch) {
-	if (DATA_NODE(handle)) {
-		int index = find_by_id(C, handle);
-		if (index < 0)
-			return -1;
-		struct style_data *d = &C->arena.h[index];
-		return d->data.idx;
-	}
-
-	struct combined_node *node = combined_cache_find(&C->cache, handle, touch);
-
-	if (node == NULL) {
-		return -1;
-	}
-	if (node->value) {
-		return node->data.idx;
-	}
-
-	// transform node
-	int child_id = eval_(C, node->a, 0);
-	if (child_id < 0)
-		return -1;
-	int parent_id = eval_(C, node->b, 0);
-	if (parent_id < 0)
-		return -1;
-
-	attrib_t child = { child_id };
-	attrib_t parent = { parent_id };
-
-	attrib_t result = attrib_inherit(C->A, child, parent, node->mask);
-	node->value = 1;
-	node->data = result;
-	return result.idx;
-}
-
-style_handle_t
-style_clone(struct style_cache *C, style_handle_t s) {
-	if (s.idx == 0)
-		return STYLE_NULL;
-	int a = style_eval(C, s);
-	if (a < 0)
-		return STYLE_NULL;
-	attrib_t attr = {a};
-	return style_handle_from_attr(C, attrib_addref(C->A, attr));
-}
-
-static void
-reset_dirty(struct style_arena *A) {
-	int i;
-	for (i=0;i<A->dirty_n;i++) {
-		int index = A->dirty[i];
-		A->h[index].dirty = 0;
-	}
-	A->dirty_n = 0;
-}
-
-static int check_node_dirty(struct style_cache *C, struct combined_node *node);
-
-static int
-check_handle_dirty(struct style_cache *C, uint64_t handle) {
-	if (DATA_NODE(handle)) {
-		int index = find_by_id(C, handle);
-		if (index < 0)	// handle is not exist, so always dirty
-			return 1;
-		struct style_data *d = &C->arena.h[index];
-		return d->dirty;
-	} else {
-		struct combined_node *node = combined_cache_find(&C->cache, handle, 0);
-		if (node == NULL) {
-			return 1;
-		}
-		return check_node_dirty(C, node);
-	}
-}
-
-static int
-check_node_dirty(struct style_cache *C, struct combined_node *node) {
-	if (node->value) {
-		int dirty = check_handle_dirty(C, node->a);	
-		dirty |= check_handle_dirty(C, node->b);
-		if (dirty) {
-			node->value = 0;
-			attrib_release(C->A, node->data);
-		}
-		return dirty;
-	} else {
-		return 1;	// dirty
+style_addref(struct style_cache *C, style_handle_t h) {
+	struct style *s = get_style(C, h.idx);
+	if (++s->refcount == 1) {
+		remove_from(C, h.idx, &C->dead);
+		link_to(C, h.idx, &C->live);
 	}
 }
 
 void
-style_flush(struct style_cache *C) {
-	if (C->arena.dirty_n <= 0)
-		return;
-	int i;
-	for (i=0;i<COMBINE_CACHE_SIZE;i++) {
-		struct combined_node *node = &C->cache.queue[i];
-		if (node->id != 0) {
-			check_node_dirty(C, node);
-		}
+style_release(struct style_cache *C, style_handle_t h) {
+	struct style *s = get_style(C, h.idx);
+	if (--s->refcount <= 0) {
+		assert(s->refcount == 0);
+		remove_from(C, h.idx, &C->live);
+		link_to(C, h.idx, &C->dead);
 	}
-	reset_dirty(&C->arena);
+}
+
+static void
+eval_(struct style_cache *C, style_handle_t h) {
+	struct style *s = get_style(C, h.idx);
+	if (s->value.idx >= 0)
+		return;
+	assert(is_combination(C, s));
+	style_handle_t ah = { s->a };
+	eval_(C, ah);
+	style_handle_t bh = { s->b };
+	eval_(C, bh);
+
+	struct style *a = get_style(C, ah.idx);
+	struct style *b = get_style(C, bh.idx);
+
+	s->value = attrib_inherit(C->A, a->value, b->value, s->withmask);
+}
+
+void
+style_assign(struct style_cache *C, style_handle_t h, style_handle_t v) {
+	struct style *s = get_style(C, h.idx);
+	assert(is_value(C, s));
+	eval_(C, v);
+	struct style *vv = get_style(C, v.idx);
+	attrib_t attr = vv->value;
+	if (attr.idx == s->value.idx)	// no change
+		return;
+	attrib_release(C->A, s->value);
+	s->value = attr;
+	make_dirty(C, s);
+}
+
+static inline void
+addref(struct style_cache *C, int index) {
+	struct style *p = get_style(C, index);
+	if (++p->refcount == 1) {
+		remove_from(C, index, &C->dead);
+		link_to(C, index, &C->live);
+	}
 }
 
 style_handle_t
 style_inherit(struct style_cache *C, style_handle_t child, style_handle_t parent, int with_mask) {
-	uint64_t id = combined_cache_new(&C->cache, child.idx, parent.idx, with_mask, &C->lastid, C->A);
-	style_handle_t ret = { id };
-	return ret;
+	int id = alloc_style(C);
+	struct style *s = &C->s[id];
+	s->a = child.idx;
+	s->b = parent.idx;
+	s->value.idx = -1;
+	s->refcount = 0;
+	s->withmask = with_mask;
+
+	link_to(C, id, &C->dead);
+
+	addref(C, child.idx);
+	addref(C, parent.idx);
+
+	struct style *left = get_style(C, child.idx);
+	struct style *right = get_style(C, parent.idx);
+
+	s->affect_left = -1;
+	s->affect_right = -1;
+
+	s->next_left = left->affect_left;
+	left->affect_left = id;
+
+	s->next_right = right->affect_right;
+	right->affect_right = id;
+
+	style_handle_t r = { id };
+	return r;
 }
 
-int
-style_eval(struct style_cache *C, style_handle_t handle) {
-	return eval_(C, handle.idx, 1);
+static attrib_t
+get_value(struct style_cache *C, style_handle_t h) {
+	struct style *s = get_style(C, h.idx);
+	if (s->value.idx < 0)
+		eval_(C, h);
+	return s->value;
 }
 
 void*
-style_find(struct style_cache *C, int attrib_id, uint8_t key) {
-	attrib_t a = { attrib_id };
+style_find(struct style_cache *C, style_handle_t h, uint8_t key) {
+	attrib_t a = get_value(C, h);
 	int index = attrib_find(C->A, a, key);
 	if (index < 0)
 		return NULL;
@@ -407,31 +355,109 @@ style_find(struct style_cache *C, int attrib_id, uint8_t key) {
 }
 
 void*
-style_index(struct style_cache *C, int attrib_id, int i, uint8_t *key) {
-	attrib_t a = { attrib_id };
+style_index(struct style_cache *C, style_handle_t h, int i, uint8_t *key) {
+	attrib_t a = get_value(C, h);
 	return attrib_index(C->A, a, i, key);
 }
 
-void
-style_dump(struct style_cache *C) {
-	printf("attrib_state size = %zu\n", attrib_memsize(C->A));
-	int n = C->arena.n;
-	printf("arena n = %d\n", n);
-	int i;
-	for (i=0;i<n;i++) {
-		struct style_data *d = &C->arena.h[i];
-		if (d->id != 0 && !d->removed) {
-			printf("\t[%d] id = %" PRIx64 "\tattrib = %x (%d)\n", i, d->id, d->data.idx, attrib_refcount(C->A, d->data));
-		}
+static void
+remove_linked_left(struct style_cache *C, int head, int linked_index, int linked_left) {
+	assert(head >= 0);
+	struct style *s = &C->s[head];
+	if (s->next_left == linked_index)
+		s->next_left = linked_left;
+	else
+		remove_linked_left(C, s->next_left, linked_index, linked_left);
+}
+
+static void
+clear_affect_left(struct style_cache *C, int index, int linked_index, int linked_left) {
+	struct style *s = &C->s[index];
+	if (s->refcount < 0)
+		return;
+	int left_head = s->affect_left;
+	assert(left_head >= 0);
+	if (left_head == linked_index) {
+		s->affect_left = linked_left;
+	} else {
+		remove_linked_left(C, left_head, linked_index, linked_left);
 	}
-	combined_cache_dump(&C->cache);
+}
+
+static void
+remove_linked_right(struct style_cache *C, int head, int linked_index, int linked_right) {
+	assert(head >= 0);
+	struct style *s = &C->s[head];
+	if (s->next_right == linked_index)
+		s->next_right = linked_right;
+	else
+		remove_linked_right(C, s->next_right, linked_index, linked_right);
+}
+
+static void
+clear_affect_right(struct style_cache *C, int index, int linked_index, int linked_right) {
+	struct style *s = &C->s[index];
+	if (s->refcount < 0)
+		return;
+	int right_head = s->affect_right;
+	assert(right_head >= 0);
+	if (right_head == linked_index) {
+		s->affect_right = linked_right;
+	} else {
+		remove_linked_right(C, right_head, linked_index, linked_right);
+	}
+}
+
+static void
+clear_affect(struct style_cache *C, int id) {
+	struct style *s = &C->s[id];
+	if (s->a >= 0)
+		clear_affect_left(C, s->a, id, s->next_left);
+	if (s->b >= 0)
+		clear_affect_right(C, s->b, id, s->next_right);
 }
 
 void
-style_check(struct style_cache *C) {
-	combined_cache_check(&C->cache);
-}
+style_flush(struct style_cache *C) {
+	int dead = C->dead;
+	if (dead < 0)
+		return;
 
+	for (;;) {
+		struct style *s = &C->s[dead];
+		if (s->refcount < 0)
+			break;
+		do {
+			struct style *s = &C->s[dead];
+			if (s->refcount < 0)
+				break;
+			assert(s->refcount == 0);
+			s->refcount = -1;
+			if (s->a >= 0) {
+				style_handle_t t = { s->a };
+				style_release(C, t);
+			}
+			if (s->b >= 0) {
+				style_handle_t t = { s->b };
+				style_release(C, t);
+			}
+			dead = s->next;
+		} while (dead >= 0);
+		dead = C->dead;
+	}
+
+	for (;;) {
+		struct style *s = &C->s[dead];
+		clear_affect(C, dead);
+		if (s->next < 0) {
+			s->next = C->freelist;
+			C->freelist = C->dead;
+			C->dead = -1;
+			return;
+		}
+		dead = s->next;
+	}
+}
 
 #ifdef STYLE_TEST_MAIN
 
@@ -439,15 +465,12 @@ style_check(struct style_cache *C) {
 
 static void
 print_handle(struct style_cache *C, style_handle_t handle) {
-	int attrib = style_eval(C, handle);
-	printf("HANDLE = %" PRIx64 ", attrib = %d\n", handle.idx, attrib);
-
-	style_dump(C);
+	printf("HANDLE = %d\n", handle.idx);
 
 	int i;
 	for (i=0;;i++) {
 		uint8_t key;
-		void* v = style_index(C, attrib, i, &key);
+		void* v = style_index(C, handle, i, &key);
 		if (v) {
 			printf("\tKey = %d , Value = %s\n", key, (const char *)v);
 		}
@@ -455,7 +478,6 @@ print_handle(struct style_cache *C, style_handle_t handle) {
 			break;
 		}
 	}
-
 }
 
 int
@@ -477,18 +499,17 @@ main() {
 
 	style_handle_t h2 = style_create(C, sizeof(b)/sizeof(b[0]), b);
 
-	style_dump(C);
-
-	style_check(C);
-
-
-	printf("h1 = %" PRIx64 ", h2 = %" PRIx64 "\n", h1.idx, h2.idx);
+	printf("h1 = %d, h2 = %d\n", h1.idx, h2.idx);
 
 	style_handle_t h3 = style_inherit(C, h1, h2, 0);
+	style_handle_t h4 = style_inherit(C, h1, h2, 0);	// will release after style_flush()
+	style_inherit(C, h4, h3, 0);	// will release after style_flush()
 
-	style_dump(C);
+	style_addref(C, h3);
 
 	print_handle(C, h3);
+
+	style_flush(C);
 
 	// Modify
 
@@ -497,15 +518,15 @@ main() {
 		{ STR("WORLD"), 2 },
 	};
 
+	printf("H1 = %d, h3 = %d\n", h1.idx, h3.idx);
+
 	style_modify(C, h1, sizeof(patch)/sizeof(patch[0]), patch);
-
-	style_flush(C);
-
-	h3 = style_clone(C, h3);
-
+	
 	print_handle(C, h3);
 
-	style_dump(C);
+	style_release(C, h3);
+
+	style_flush(C);
 
 	style_deletecache(C);
 
