@@ -284,7 +284,8 @@ static int
 eval_(struct style_cache *C, uint64_t handle) {
 	if (DATA_NODE(handle)) {
 		int index = find_by_id(C, handle);
-		assert(index >= 0);
+		if (index < 0)
+			return -1;
 		struct style_data *d = &C->arena.h[index];
 		return d->data.idx;
 	}
