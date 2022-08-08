@@ -42,6 +42,12 @@ struct intern_cache {
 #ifdef TEST_INTERN
 
 static inline void
+verify_init(struct intern_cache *C) {
+	struct verify_cache *v = &C->v;
+	v->n = 0;
+}
+
+static inline void
 verify_insert(struct intern_cache *C, uint32_t index) {
 	struct verify_cache *v = &C->v;
 	assert(v->n <= MAX_INDEX);
@@ -68,6 +74,7 @@ verify_remove(struct intern_cache *C, uint32_t index) {
 
 #else
 
+static inline void verify_init(struct intern_cache *C) {};
 static inline void verify_insert(struct intern_cache *C, uint32_t index) {}
 static inline void verify_remove(struct intern_cache *C, uint32_t index) {};
 
@@ -81,6 +88,7 @@ struct intern_cache_iterator {
 static inline void
 intern_cache_init(struct intern_cache *c, int bits) {
 	memset(c, 0, sizeof(*c));
+	verify_init(c);
 	c->n = 0;
 	c->size =  1 << bits;
 	c->shift = 32 - bits - 1;
