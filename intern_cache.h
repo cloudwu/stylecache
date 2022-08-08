@@ -239,7 +239,7 @@ remove_collide_(struct intern_cache *c, int cindex) {
 
 static inline void
 itern_cache_remove(struct intern_cache *c, uint32_t index, hash_get_func hash, void *ud) {
-	verify_insert(c, index);
+	verify_remove(c, index);
 	struct intern_cache_iterator iter;
 	uint32_t h = hash(index, ud);
 	int found = 0;
