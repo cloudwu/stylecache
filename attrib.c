@@ -17,7 +17,6 @@
 #define MAX_KEY 128
 #define DELAY_REMOVE 4096
 
-
 // #define VERIFY_ATTRIBID
 
 #ifdef VERIFY_ATTRIBID
@@ -108,7 +107,7 @@ struct attrib_state {
 static inline void
 verify_attrib_init(struct attrib_state *A) {
 	struct verify_attrib *v = &A->v;
-	v->lastid = 0;
+	v->lastid = 100000;
 	v->n = 0;
 }
 
@@ -563,7 +562,8 @@ attrib_create(struct attrib_state *A, int n, const int e[]) {
 
 static void
 delete_tuple(struct attrib_state *A, int index) {
-	struct attrib_array * a = A->tuple.s[index].a;
+	int id = verify_attribid(A, index);
+	struct attrib_array * a = A->tuple.s[id].a;
 	if (--a->refcount > 0)
 		return;
 	int i;
@@ -571,7 +571,7 @@ delete_tuple(struct attrib_state *A, int index) {
 		arena_release(A, a->data[i]);
 	}
 	intern_cache_remove(&A->tuple_i, index, TUPLE_HASH(A));
-	tuple_delete(&A->tuple, index);
+	tuple_delete(&A->tuple, id);
 
 	inherit_cache_retirekey(&A->icache, index);
 }
@@ -586,7 +586,7 @@ attrib_release(struct attrib_state *A, attrib_t handle) {
 		a->refcount = 1;	// keep ref in delay queue
 		int removed_index = delay_remove(&A->tuple_removed, handle.idx);
 		if (removed_index >= 0) {
-			delete_tuple(A, verify_attribid(A, removed_index));
+			delete_tuple(A, removed_index);
 			verify_attrib_dealloc(A, removed_index);
 		}
 	}
