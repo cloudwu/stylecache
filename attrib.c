@@ -18,7 +18,7 @@
 #define DELAY_REMOVE 4096
 
 
-#define VERIFY_ATTRIBID
+// #define VERIFY_ATTRIBID
 
 #ifdef VERIFY_ATTRIBID
 

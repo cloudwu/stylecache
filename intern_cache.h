@@ -11,7 +11,7 @@
 
 #ifdef TEST_INTERN
 
-#define VERIFY struct verify_cache v;
+#define VERIFY_INTERN struct verify_cache v;
 
 #define MAX_INDEX 0x10000
 
@@ -22,7 +22,7 @@ struct verify_cache {
 
 #else
 
-#define VERIFY
+#define VERIFY_INTERN
 
 #endif
 
@@ -35,7 +35,7 @@ struct intern_cache {
 	int n;
 	uint32_t *index;	// 2x n hash map
 	uint32_t *collide;	// n collide array
-	VERIFY
+	VERIFY_INTERN
 };
 
 
