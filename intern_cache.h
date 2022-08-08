@@ -7,6 +7,25 @@
 #include <stdlib.h>
 #include <assert.h>
 
+//#define TEST_INTERN
+
+#ifdef TEST_INTERN
+
+#define VERIFY struct verify_cache v;
+
+#define MAX_INDEX 0x10000
+
+struct verify_cache {
+	int n;
+	uint32_t index[MAX_INDEX];
+};
+
+#else
+
+#define VERIFY
+
+#endif
+
 #define INVALID_INDEX (~0)
 
 struct intern_cache {
@@ -16,7 +35,43 @@ struct intern_cache {
 	int n;
 	uint32_t *index;	// 2x n hash map
 	uint32_t *collide;	// n collide array
+	VERIFY
 };
+
+
+#ifdef TEST_INTERN
+
+static inline void
+verify_insert(struct intern_cache *C, uint32_t index) {
+	struct verify_cache *v = &C->v;
+	assert(v->n <= MAX_INDEX);
+	int i;
+	for (i=0;i<v->n;i++) {
+		assert(v->index[i] != index);
+	}
+	v->index[v->n++] = index;
+}
+
+static inline void
+verify_remove(struct intern_cache *C, uint32_t index) {
+	int i;
+	struct verify_cache *v = &C->v;
+	for (i=0;i<v->n;i++) {
+		if (v->index[i] == index) {
+			--v->n;
+			memmove(v->index + i, v->index + i + 1, (v->n - i) * sizeof(uint32_t));
+			return;
+		}
+	}
+	assert(0);
+}
+
+#else
+
+static inline void verify_insert(struct intern_cache *C, uint32_t index) {}
+static inline void verify_remove(struct intern_cache *C, uint32_t index) {};
+
+#endif
 
 struct intern_cache_iterator {
 	uint32_t result;
@@ -106,6 +161,7 @@ intern_cache_resize_(struct intern_cache *c, int bits, hash_get_func hash, void 
 
 static inline void
 intern_cache_insert(struct intern_cache *c, uint32_t index, hash_get_func hash, void *ud) {
+	verify_insert(c, index);
 	++c->n;
 	if (c->n >= c->size) {
 		int bits = 31 - c->shift;
@@ -183,6 +239,7 @@ remove_collide_(struct intern_cache *c, int cindex) {
 
 static inline void
 itern_cache_remove(struct intern_cache *c, uint32_t index, hash_get_func hash, void *ud) {
+	verify_insert(c, index);
 	struct intern_cache_iterator iter;
 	uint32_t h = hash(index, ud);
 	int found = 0;
