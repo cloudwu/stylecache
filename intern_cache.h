@@ -211,7 +211,7 @@ intern_cache_find(struct intern_cache *c, uint32_t h, struct intern_cache_iterat
 }
 
 static inline int
-itern_cache_find_next(struct intern_cache *c, struct intern_cache_iterator *iter, hash_get_func hash, void *ud) {
+intern_cache_find_next(struct intern_cache *c, struct intern_cache_iterator *iter, hash_get_func hash, void *ud) {
 	if (iter->collide < 0) {
 		uint32_t h = hash(iter->result, ud);
 		iter->collide = lower_bound_(c, h, 0, c->collide_n, hash, ud);
@@ -238,7 +238,7 @@ remove_collide_(struct intern_cache *c, int cindex) {
 }
 
 static inline void
-itern_cache_remove(struct intern_cache *c, uint32_t index, hash_get_func hash, void *ud) {
+intern_cache_remove(struct intern_cache *c, uint32_t index, hash_get_func hash, void *ud) {
 	verify_remove(c, index);
 	struct intern_cache_iterator iter;
 	uint32_t h = hash(index, ud);
@@ -249,7 +249,7 @@ itern_cache_remove(struct intern_cache *c, uint32_t index, hash_get_func hash, v
 				found = 1;
 				break;
 			}
-		} while (itern_cache_find_next(c, &iter, hash, ud));
+		} while (intern_cache_find_next(c, &iter, hash, ud));
 	}
 	assert(found);
 	--c->n;

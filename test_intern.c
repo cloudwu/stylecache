@@ -27,7 +27,7 @@ print_value(struct intern_cache *cache, struct node *array, int value) {
 			if (n->value == value) {
 				printf("result = %d Value = %d index = %d\n", (int)iter.result , n->value, n->index);
 			}
-		} while (itern_cache_find_next(cache, &iter, get_hash, array));
+		} while (intern_cache_find_next(cache, &iter, get_hash, array));
 	}
 }
 

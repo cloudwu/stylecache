@@ -298,7 +298,7 @@ attrib_entryid(struct attrib_state *A, int key, void *ptr, size_t sz) {
 					}
 				}
 			}
-		} while (itern_cache_find_next(&A->arena_i, &iter,  ATTRIB_KV_HASH(A)));
+		} while (intern_cache_find_next(&A->arena_i, &iter,  ATTRIB_KV_HASH(A)));
 	}
 	// new entry
 	int	new_index = arena_create(&A->arena, key, ptr, sz, hash);
@@ -329,7 +329,7 @@ arena_release(struct attrib_state *A, int id) {
 		if (removed_index >= 0) {
 			kv = &arena->e[removed_index];
 			if (--kv->refcount == 0) {
-				itern_cache_remove(&A->arena_i, id,  ATTRIB_KV_HASH(A));
+				intern_cache_remove(&A->arena_i, id,  ATTRIB_KV_HASH(A));
 				if (kv->blob) {
 					free(kv->v.ptr);
 					kv->blob = 0;
@@ -405,7 +405,7 @@ tuple_hash_find(struct attrib_state *A, uint32_t hash, int n, int *buf) {
 			if (n == a->n && memcmp(buf, a->data, n * sizeof(int)) == 0) {
 				return iter.result;
 			}
-		} while (itern_cache_find_next(&A->tuple_i, &iter, TUPLE_HASH(A)));
+		} while (intern_cache_find_next(&A->tuple_i, &iter, TUPLE_HASH(A)));
 	}
 	return -1;
 }
@@ -454,7 +454,7 @@ delete_tuple(struct attrib_state *A, int index) {
 	for (i=0;i<a->n;i++) {
 		arena_release(A, a->data[i]);
 	}
-	itern_cache_remove(&A->tuple_i, index, TUPLE_HASH(A));
+	intern_cache_remove(&A->tuple_i, index, TUPLE_HASH(A));
 	tuple_delete(&A->tuple, index);
 
 	inherit_cache_retirekey(&A->icache, index);
