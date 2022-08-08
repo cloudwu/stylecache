@@ -17,6 +17,30 @@
 #define MAX_KEY 128
 #define DELAY_REMOVE 4096
 
+
+#define VERIFY_ATTRIBID
+
+#ifdef VERIFY_ATTRIBID
+
+#define MAX_ATTRIBID 0x10000
+
+struct verify_attrib {
+	int n;
+	int lastid;
+	struct {
+		int vid;
+		int id;
+	} id[MAX_ATTRIBID];
+};
+
+#define VERIFY_ATTRIB struct verify_attrib v;
+
+#else
+
+#define VERIFY_ATTRIB
+
+#endif
+
 struct attrib_blob {
 	size_t sz;
 	uint8_t data[1];
@@ -75,7 +99,75 @@ struct attrib_state {
 	struct delay_removed kv_removed;
 	struct delay_removed tuple_removed;
 	unsigned char inherit_mask[128];
+	VERIFY_ATTRIB
 };
+
+
+#ifdef VERIFY_ATTRIBID
+
+static inline void
+verify_attrib_init(struct attrib_state *A) {
+	struct verify_attrib *v = &A->v;
+	v->lastid = 0;
+	v->n = 0;
+}
+
+static inline attrib_t
+verify_attrib_alloc(struct attrib_state *A, int id) {
+	struct verify_attrib *v = &A->v;
+	int vid = ++v->lastid;
+	assert(vid != 0);
+	int n = v->n++;
+	assert(n < MAX_ATTRIBID);
+	v->id[n].vid = vid;
+	v->id[n].id = id;
+	attrib_t r = { vid };
+	return r;
+}
+
+static inline int
+verify_attrib_find_(struct verify_attrib *v, int vid) {
+	int begin = 0;
+	int end = v->n;
+	while (begin < end) {
+		int mid = (begin + end)/2;
+		int midv = v->id[mid].vid;
+		if (midv == vid) {
+			return mid;
+		} else if (midv < vid) {
+			begin = mid + 1;
+		} else {
+			end = mid;
+		}
+	}
+	assert(0);
+	return -1;
+}
+
+static inline void
+verify_attrib_dealloc(struct attrib_state *A, int vid) {
+	struct verify_attrib *v = &A->v;
+	int p = verify_attrib_find_(v, vid);
+	--v->n;
+	memmove(v->id + p, v->id + p + 1, (v->n - p) * sizeof(v->id[0]));
+}
+
+static inline int
+verify_attribid(struct attrib_state *A, int vid) {
+	struct verify_attrib *v = &A->v;
+	int p = verify_attrib_find_(v, vid);
+	return v->id[p].id;
+}
+
+#else
+
+static inline void verify_attrib_init(struct attrib_state *A) {}
+static inline attrib_t verify_attrib_alloc(struct attrib_state *A, int id) { attrib_t r = { id }; return r; }
+static inline void verify_attrib_dealloc(struct attrib_state *A, int id) {}
+static inline int verify_attribid(struct attrib_state *A, int id) { return id; }
+
+#endif
+
 
 static int
 delay_remove(struct delay_removed *removed, int index) {
@@ -252,6 +344,7 @@ attrib_newstate(const unsigned char inherit_mask[128]) {
 	delay_remove_init(&A->tuple_removed);
 	intern_cache_init(&A->arena_i, DEFAULT_ATTRIB_ARENA_BITS);
 	intern_cache_init(&A->tuple_i, DEFAULT_TUPLE_BITS);
+	verify_attrib_init(A);
 
 	if (inherit_mask == NULL) {
 		memset(A->inherit_mask,1,sizeof(A->inherit_mask));
@@ -385,7 +478,8 @@ add_kv(struct attrib_state *A, int buffer[MAX_KEY], int n, int index) {
 
 static inline attrib_t
 addref(struct attrib_state *A, attrib_t handle) {
-	A->tuple.s[handle.idx].a->refcount++;
+	int index = verify_attribid(A, handle.idx);
+	A->tuple.s[index].a->refcount++;
 	return handle;
 }
 
@@ -394,6 +488,19 @@ attrib_addref(struct attrib_state *A, attrib_t handle) {
 	return addref(A, handle);
 }
 
+#ifdef VERIFY_ATTRIBID
+
+static uint32_t
+tuple_hash_(uint32_t index, void *t) {
+	struct attrib_state *A = (struct attrib_state *)t;
+	union attrib_tuple_entry *e = A->tuple.s;
+	return e[verify_attribid(A, index)].a->hash;
+}
+
+#define TUPLE_HASH(A) tuple_hash_, A
+
+#else
+
 static uint32_t
 tuple_hash_(uint32_t index, void *t) {
 	union attrib_tuple_entry *e = (union attrib_tuple_entry *)t;
@@ -401,6 +508,8 @@ tuple_hash_(uint32_t index, void *t) {
 }
 
 #define TUPLE_HASH(A) tuple_hash_, A->tuple.s
+
+#endif
 
 static int
 tuple_hash_find(struct attrib_state *A, uint32_t hash, int n, int *buf) {
@@ -445,9 +554,10 @@ attrib_create(struct attrib_state *A, int n, const int e[]) {
 	}
 	int id = tuple_new(&A->tuple, a);
 
-	intern_cache_insert(&A->tuple_i, id, TUPLE_HASH(A));
+	attrib_t ret = verify_attrib_alloc(A, id);
 
-	attrib_t ret = { id };
+	intern_cache_insert(&A->tuple_i, ret.idx, TUPLE_HASH(A));
+
 	return ret;
 }
 
@@ -468,15 +578,16 @@ delete_tuple(struct attrib_state *A, int index) {
 
 int
 attrib_release(struct attrib_state *A, attrib_t handle) {
-	int index = handle.idx;
+	int index = verify_attribid(A, handle.idx);
 	assert(index >= 0 && index < A->tuple.n);
 	struct attrib_array * a = A->tuple.s[index].a;
 	--a->refcount;
 	if (a->refcount == 0) {
 		a->refcount = 1;	// keep ref in delay queue
-		int removed_index = delay_remove(&A->tuple_removed, index);
+		int removed_index = delay_remove(&A->tuple_removed, handle.idx);
 		if (removed_index >= 0) {
-			delete_tuple(A, removed_index);
+			delete_tuple(A, verify_attribid(A, removed_index));
+			verify_attrib_dealloc(A, removed_index);
 		}
 	}
 	return a->refcount;
@@ -484,7 +595,7 @@ attrib_release(struct attrib_state *A, attrib_t handle) {
 
 static inline struct attrib_array *
 get_array(struct attrib_state *A, attrib_t handle) {
-	int index = handle.idx;
+	int index = verify_attribid(A, handle.idx);
 	assert(index >= 0 && index < A->tuple.n);
 	struct attrib_array * a = A->tuple.s[index].a;
 	return a;
@@ -504,7 +615,7 @@ get_kv(struct attrib_state *A, struct attrib_array * a, int index) {
 
 int
 attrib_find(struct attrib_state *A, attrib_t handle, uint8_t key) {
-	int index = handle.idx;
+	int index = verify_attribid(A, handle.idx);
 	assert(index >= 0 && index < A->tuple.n);
 	struct attrib_array * a = A->tuple.s[index].a;
 	int begin = 0;
@@ -525,7 +636,7 @@ attrib_find(struct attrib_state *A, attrib_t handle, uint8_t key) {
 
 void*
 attrib_index(struct attrib_state *A, attrib_t handle, int i, uint8_t *key) {
-	int index = handle.idx;
+	int index = verify_attribid(A, handle.idx);
 	assert(index >= 0 && index < A->tuple.n);
 	struct attrib_array * a = A->tuple.s[index].a;
 	if (i < 0 || i >= a->n)
