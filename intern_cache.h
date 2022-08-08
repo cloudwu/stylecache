@@ -7,7 +7,7 @@
 #include <stdlib.h>
 #include <assert.h>
 
-//#define TEST_INTERN
+// #define TEST_INTERN
 
 #ifdef TEST_INTERN
 
@@ -65,7 +65,7 @@ verify_remove(struct intern_cache *C, uint32_t index) {
 	for (i=0;i<v->n;i++) {
 		if (v->index[i] == index) {
 			--v->n;
-			v->index[v->i] = v->index[n];
+			v->index[i] = v->index[v->n];
 			return;
 		}
 	}
@@ -86,15 +86,20 @@ struct intern_cache_iterator {
 };
 
 static inline void
-intern_cache_init(struct intern_cache *c, int bits) {
-	memset(c, 0, sizeof(*c));
-	verify_init(c);
-	c->n = 0;
+intern_cache_reinit_(struct intern_cache *c, int bits) {
 	c->size =  1 << bits;
 	c->shift = 32 - bits - 1;
 	c->collide = (uint32_t *)malloc(c->size * 3 * sizeof(uint32_t));
 	c->index = c->collide + c->size;
+	c->collide_n = 0;
 	memset(c->index, 0xff, c->size * 2 * sizeof(uint32_t));
+}
+
+static inline void
+intern_cache_init(struct intern_cache *c, int bits) {
+	intern_cache_reinit_(c, bits);
+	verify_init(c);
+	c->n = 0;
 }
 
 static inline void
@@ -152,9 +157,7 @@ intern_cache_resize_(struct intern_cache *c, int bits, hash_get_func hash, void 
 	uint32_t *collide = c->collide;
 	int size = c->size;
 	int collide_n = c->collide_n;
-	int n = c->n;
-	intern_cache_init(c, bits);
-	c->n = n;
+	intern_cache_reinit_(c, bits);
 	int i;
 	for (i=0;i<collide_n;i++) {
 		intern_cache_insert_(c, collide[i], hash, ud);
