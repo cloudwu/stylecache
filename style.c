@@ -33,6 +33,7 @@ struct style {
 struct style_cache {
 	struct attrib_state *A;
 	struct style *s;
+	style_handle_t empty;
 	int n;
 	int cap;
 	int freelist;
@@ -51,6 +52,7 @@ style_newcache(const unsigned char inherit_mask[128]) {
 	c->freelist = -1;
 	c->live = -1;
 	c->dead = -1;
+	c->empty = style_create(c, 0, NULL);
 	return c;
 }
 
@@ -286,13 +288,15 @@ eval_(struct style_cache *C, style_handle_t h) {
 void
 style_assign(struct style_cache *C, style_handle_t h, style_handle_t v) {
 	struct style *s = get_style(C, h.idx);
-	assert(is_value(C, s));
+	assert(is_combination(C, s));
 	eval_(C, v);
 	struct style *vv = get_style(C, v.idx);
 	attrib_t attr = vv->value;
 	if (attr.idx == s->value.idx)	// no change
 		return;
-	attrib_release(C->A, s->value);
+	if (s->value.idx >= 0) {
+		attrib_release(C->A, s->value);
+	}
 	s->value = attr;
 	make_dirty(C, s);
 }
@@ -335,6 +339,11 @@ style_inherit(struct style_cache *C, style_handle_t child, style_handle_t parent
 
 	style_handle_t r = { id };
 	return r;
+}
+
+style_handle_t
+style_ref(struct style_cache *C) {
+	return style_inherit(C, C->empty, C->empty, 0);
 }
 
 static attrib_t
@@ -524,9 +533,19 @@ main() {
 	
 	print_handle(C, h3);
 
+	style_handle_t h5 = style_ref(C);
+
+	print_handle(C, h5);
+
+	style_addref(C, h5);
+
+	style_assign(C, h5, h3);
+
 	style_release(C, h3);
 
 	style_flush(C);
+
+	print_handle(C, h5);
 
 	style_deletecache(C);
 
