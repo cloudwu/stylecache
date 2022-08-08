@@ -560,12 +560,12 @@ attrib_create(struct attrib_state *A, int n, const int e[]) {
 	return ret;
 }
 
-static void
+static int
 delete_tuple(struct attrib_state *A, int index) {
 	int id = verify_attribid(A, index);
 	struct attrib_array * a = A->tuple.s[id].a;
 	if (--a->refcount > 0)
-		return;
+		return 0;
 	int i;
 	for (i=0;i<a->n;i++) {
 		arena_release(A, a->data[i]);
@@ -574,6 +574,7 @@ delete_tuple(struct attrib_state *A, int index) {
 	tuple_delete(&A->tuple, id);
 
 	inherit_cache_retirekey(&A->icache, index);
+	return 1;
 }
 
 int
@@ -586,8 +587,8 @@ attrib_release(struct attrib_state *A, attrib_t handle) {
 		a->refcount = 1;	// keep ref in delay queue
 		int removed_index = delay_remove(&A->tuple_removed, handle.idx);
 		if (removed_index >= 0) {
-			delete_tuple(A, removed_index);
-			verify_attrib_dealloc(A, removed_index);
+			if (delete_tuple(A, removed_index))
+				verify_attrib_dealloc(A, removed_index);
 		}
 	}
 	return a->refcount;
