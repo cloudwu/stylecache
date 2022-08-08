@@ -72,6 +72,11 @@ style_memsize(struct style_cache *C) {
 	return sz;
 }
 
+style_handle_t
+style_null(struct style_cache *C) {
+	return C->empty;
+}
+
 static int
 alloc_style(struct style_cache *c) {
 	if (c->freelist >= 0) {
@@ -288,15 +293,13 @@ eval_(struct style_cache *C, style_handle_t h) {
 void
 style_assign(struct style_cache *C, style_handle_t h, style_handle_t v) {
 	struct style *s = get_style(C, h.idx);
-	assert(is_combination(C, s));
+	assert(is_value(C, s));
 	eval_(C, v);
 	struct style *vv = get_style(C, v.idx);
 	attrib_t attr = vv->value;
 	if (attr.idx == s->value.idx)	// no change
 		return;
-	if (s->value.idx >= 0) {
-		attrib_release(C->A, s->value);
-	}
+	attrib_release(C->A, s->value);
 	s->value = attr;
 	make_dirty(C, s);
 }
@@ -339,11 +342,6 @@ style_inherit(struct style_cache *C, style_handle_t child, style_handle_t parent
 
 	style_handle_t r = { id };
 	return r;
-}
-
-style_handle_t
-style_ref(struct style_cache *C) {
-	return style_inherit(C, C->empty, C->empty, 0);
 }
 
 static attrib_t
@@ -533,19 +531,15 @@ main() {
 	
 	print_handle(C, h3);
 
-	style_handle_t h5 = style_ref(C);
+	style_handle_t h5 = style_null(C);
+
+	h5 = style_inherit(C, h5, h3, 0);
 
 	print_handle(C, h5);
-
-	style_addref(C, h5);
-
-	style_assign(C, h5, h3);
 
 	style_release(C, h3);
 
 	style_flush(C);
-
-	print_handle(C, h5);
 
 	style_deletecache(C);
 
