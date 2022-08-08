@@ -122,23 +122,27 @@ insert_(struct intern_cache *c, uint32_t index, int p) {
 	++c->collide_n;
 }
 
+static inline uint32_t
+get_hash_(struct intern_cache *c, uint32_t index, hash_get_func hash, void *ud) {
+	return hash(index, ud) >> c->shift;
+}
+
 static inline void
 intern_cache_insert_(struct intern_cache *c, uint32_t index, hash_get_func hash, void *ud) {
-	uint32_t h = hash(index, ud);
-	int mainslot = h >> c->shift;
-	if (c->index[mainslot] != INVALID_INDEX) {
-		uint32_t cindex = c->index[mainslot];
+	uint32_t h = get_hash_(c, index, hash, ud);
+	if (c->index[h] != INVALID_INDEX) {
+		uint32_t cindex = c->index[h];
 		assert(cindex != index);
 		int begin = 0;
 		int end = c->collide_n;
 		while (begin < end) {
 			int mid = (begin + end) / 2;
 			uint32_t i = c->collide[mid];
-			uint32_t mid_h = hash(i, ud);
+			uint32_t mid_h = get_hash_(c, i, hash, ud);
 			if (h == mid_h) {
 				assert(i != cindex);
 				insert_(c, cindex, mid);
-				c->index[mainslot] = index;
+				c->index[h] = index;
 				return;
 			} else if (h < mid_h) {
 				end = mid;
@@ -148,7 +152,7 @@ intern_cache_insert_(struct intern_cache *c, uint32_t index, hash_get_func hash,
 		}
 		insert_(c, cindex, begin);
 	}
-	c->index[mainslot] = index;
+	c->index[h] = index;
 }
 
 static inline void
@@ -186,7 +190,7 @@ lower_bound_(struct intern_cache *c, uint32_t h, int begin, int end, hash_get_fu
 	while (begin < end) {
 		int mid = (begin + end) / 2;
 		uint32_t i = c->collide[mid];
-		uint32_t mid_h = hash(i, ud);
+		uint32_t mid_h = get_hash_(c, i, hash, ud);
 		if (h == mid_h) {
 			int bound = lower_bound_(c, h, begin, mid , hash, ud);
 			if (bound >= 0)
@@ -205,11 +209,11 @@ lower_bound_(struct intern_cache *c, uint32_t h, int begin, int end, hash_get_fu
 // return 0 : not found
 static inline int
 intern_cache_find(struct intern_cache *c, uint32_t h, struct intern_cache_iterator *iter, hash_get_func hash, void *ud) {
-	int mainslot = h >> c->shift;
-	uint32_t v = c->index[mainslot];
+	h = h >> c->shift;
+	uint32_t v = c->index[h];
 	if (v == INVALID_INDEX)
 		return 0;
-	if (hash(v, ud) == h) {
+	if (get_hash_(c, v, hash, ud) == h) {
 		iter->result = v;
 		iter->collide = -1;
 		return 1;
@@ -224,7 +228,7 @@ intern_cache_find(struct intern_cache *c, uint32_t h, struct intern_cache_iterat
 static inline int
 intern_cache_find_next(struct intern_cache *c, struct intern_cache_iterator *iter, hash_get_func hash, void *ud) {
 	if (iter->collide < 0) {
-		uint32_t h = hash(iter->result, ud);
+		uint32_t h = get_hash_(c, iter->result, hash, ud);
 		iter->collide = lower_bound_(c, h, 0, c->collide_n, hash, ud);
 		if (iter->collide < 0)
 			return 0;
@@ -234,9 +238,9 @@ intern_cache_find_next(struct intern_cache *c, struct intern_cache_iterator *ite
 		++iter->collide;
 		if (iter->collide >= c->collide_n)
 			return 0;
-		uint32_t h = hash(iter->result, ud);
+		uint32_t h = get_hash_(c, iter->result, hash, ud);
 		iter->result = c->collide[iter->collide];
-		uint32_t nexth = hash(iter->result, ud);
+		uint32_t nexth = get_hash_(c, iter->result, hash, ud);
 		return (h == nexth);
 	}
 }
@@ -265,14 +269,13 @@ intern_cache_remove(struct intern_cache *c, uint32_t index, hash_get_func hash, 
 	assert(found);
 	--c->n;
 	if (iter.collide < 0) {
-		uint32_t h = hash(iter.result, ud);
-		int i = h >> c->shift;
-		assert(c->index[i] == iter.result);
+		uint32_t h = get_hash_(c, iter.result, hash, ud);
+		assert(c->index[h] == iter.result);
 		int cindex = lower_bound_(c, h, 0, c->collide_n, hash, ud);
 		if (cindex < 0) {
-			c->index[i] = INVALID_INDEX;
+			c->index[h] = INVALID_INDEX;
 		} else {
-			c->index[i] = c->collide[cindex];
+			c->index[h] = c->collide[cindex];
 			remove_collide_(c, cindex);
 		}
 	} else {
