@@ -59,7 +59,7 @@ verify_remove(struct intern_cache *C, uint32_t index) {
 	for (i=0;i<v->n;i++) {
 		if (v->index[i] == index) {
 			--v->n;
-			v->index[v->n] = v->index[i];
+			v->index[v->i] = v->index[n];
 			return;
 		}
 	}
