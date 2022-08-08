@@ -516,7 +516,7 @@ tuple_hash_find(struct attrib_state *A, uint32_t hash, int n, int *buf) {
 	struct intern_cache_iterator iter;
 	if (intern_cache_find(&A->tuple_i, hash, &iter, TUPLE_HASH(A))) {
 		do {
-			struct attrib_array *a = A->tuple.s[iter.result].a;
+			struct attrib_array *a = A->tuple.s[verify_attribid(A, iter.result)].a;
 			if (n == a->n && memcmp(buf, a->data, n * sizeof(int)) == 0) {
 				return iter.result;
 			}
@@ -759,7 +759,7 @@ attrib_inherit(struct attrib_state *A, attrib_t child, attrib_t parent, int with
 
 int
 attrib_refcount(struct attrib_state *A, attrib_t attr) {
-	int index = attr.idx;
+	int index = verify_attribid(A, attr.idx);
 	struct attrib_array * a = A->tuple.s[index].a;
 	return a->refcount;
 }
