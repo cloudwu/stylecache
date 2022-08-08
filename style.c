@@ -296,7 +296,7 @@ style_assign(struct style_cache *C, style_handle_t h, style_handle_t v) {
 	assert(is_value(C, s));
 	eval_(C, v);
 	struct style *vv = get_style(C, v.idx);
-	attrib_t attr = vv->value;
+	attrib_t attr = attrib_addref(C->A, vv->value);
 	if (attr.idx == s->value.idx)	// no change
 		return;
 	attrib_release(C->A, s->value);
