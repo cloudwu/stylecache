@@ -316,6 +316,21 @@ create_attrib_array(int n, uint32_t hash) {
 	return a;
 }
 
+static void
+release_kv(struct attrib_state *A, int removed_index) {
+	struct attrib_arena *arena = &(A->arena);
+	struct attrib_kv * kv = &arena->e[removed_index];
+	if (--kv->refcount == 0) {
+		intern_cache_remove(&A->arena_i, removed_index,  ATTRIB_KV_HASH(A));
+		if (kv->blob) {
+			free(kv->v.ptr);
+			kv->blob = 0;
+		}
+		kv->v.next = arena->freelist;
+		arena->freelist = removed_index;
+	}
+}
+
 static int
 arena_release(struct attrib_state *A, int id) {
 	struct attrib_arena *arena = &(A->arena);
@@ -327,16 +342,7 @@ arena_release(struct attrib_state *A, int id) {
 		kv->refcount = 1;
 		int removed_index = delay_remove(&A->kv_removed, id);
 		if (removed_index >= 0) {
-			kv = &arena->e[removed_index];
-			if (--kv->refcount == 0) {
-				intern_cache_remove(&A->arena_i, id,  ATTRIB_KV_HASH(A));
-				if (kv->blob) {
-					free(kv->v.ptr);
-					kv->blob = 0;
-				}
-				kv->v.next = arena->freelist;
-				arena->freelist = id;
-			}
+			release_kv(A, removed_index);
 		}
 	}
 	return c;
