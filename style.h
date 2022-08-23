@@ -14,9 +14,10 @@ struct style_attrib {
 	int change;	// output
 };
 
-struct style_cache * style_newcache(const unsigned char inherit_mask[128]);
+typedef void * (*style_alloc) (void *ud, void *ptr, size_t osize, size_t nsize);
+
+struct style_cache * style_newcache(const unsigned char inherit_mask[128], style_alloc alloc, void *ud);
 void style_deletecache(struct style_cache *);
-size_t style_memsize(struct style_cache *);
 style_handle_t style_null(struct style_cache *);
 
 style_handle_t style_create(struct style_cache *, int n, struct style_attrib a[]);

@@ -1,5 +1,6 @@
 #include "intern_cache.h"
 #include "hash.h"
+#include "style.h"
 #include <stdint.h>
 #include <assert.h>
 #include <stdio.h>
@@ -33,17 +34,18 @@ print_value(struct intern_cache *cache, struct node *array, int value) {
 
 int
 main() {
+	struct style_cache *C = style_newcache(NULL, NULL, NULL);
 	struct intern_cache cache;
 	struct node array[100];
 	int i;
 
-	intern_cache_init(&cache, 4);	// 16 slots
+	intern_cache_init(C, &cache, 4);	// 16 slots
 	for (i=0;i<10;i++) {
 		array[i].hash = int32_hash(i/4);
 		array[i].value = i/2;
 		array[i].index = i;
 		printf("INSERT [%d] %d\n", i, i/2);
-		intern_cache_insert(&cache, i, get_hash, array);
+		intern_cache_insert(&cache, i, get_hash, array, C);
 	}
 
 	for (i=0;i<5;i++) {
@@ -55,13 +57,15 @@ main() {
 		array[i].value = i/2;
 		array[i].index = i;
 		printf("INSERT [%d] %d\n", i, i/2);
-		intern_cache_insert(&cache, i, get_hash, array);
+		intern_cache_insert(&cache, i, get_hash, array, C);
 	}
 
 	for (i=0;i<15;i++) {
 		print_value(&cache, array, i);
 	}
 
-	intern_cache_deinit(&cache);
+	intern_cache_deinit(C, &cache);
+
+	style_deletecache(C);
 	return 0;
 }

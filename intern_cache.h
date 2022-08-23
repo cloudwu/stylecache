@@ -7,6 +7,8 @@
 #include <stdlib.h>
 #include <assert.h>
 
+#include "style_alloc.h"
+
 // #define TEST_INTERN
 
 #ifdef TEST_INTERN
@@ -86,30 +88,25 @@ struct intern_cache_iterator {
 };
 
 static inline void
-intern_cache_reinit_(struct intern_cache *c, int bits) {
+intern_cache_reinit_(struct style_cache *C, struct intern_cache *c, int bits) {
 	c->size =  1 << bits;
 	c->shift = 32 - bits - 1;
-	c->collide = (uint32_t *)malloc(c->size * 3 * sizeof(uint32_t));
+	c->collide = (uint32_t *)style_malloc(C, c->size * 3 * sizeof(uint32_t));
 	c->index = c->collide + c->size;
 	c->collide_n = 0;
 	memset(c->index, 0xff, c->size * 2 * sizeof(uint32_t));
 }
 
 static inline void
-intern_cache_init(struct intern_cache *c, int bits) {
-	intern_cache_reinit_(c, bits);
+intern_cache_init(struct style_cache *C, struct intern_cache *c, int bits) {
+	intern_cache_reinit_(C, c, bits);
 	verify_init(c);
 	c->n = 0;
 }
 
 static inline void
-intern_cache_deinit(struct intern_cache *c) {
-	free(c->collide);
-}
-
-static inline size_t
-intern_cache_memsize(struct intern_cache *c) {
-	return c->size * 3 * sizeof(uint32_t);
+intern_cache_deinit(struct style_cache *C, struct intern_cache *c) {
+	style_free(C, c->collide, c->size * 3 * sizeof(uint32_t));
 }
 
 typedef uint32_t (*hash_get_func)(uint32_t index, void *ud);
@@ -156,12 +153,12 @@ intern_cache_insert_(struct intern_cache *c, uint32_t index, hash_get_func hash,
 }
 
 static inline void
-intern_cache_resize_(struct intern_cache *c, int bits, hash_get_func hash, void *ud) {
+intern_cache_resize_(struct intern_cache *c, int bits, hash_get_func hash, void *ud, struct style_cache *C) {
 	uint32_t *index = c->index;
 	uint32_t *collide = c->collide;
 	int size = c->size;
 	int collide_n = c->collide_n;
-	intern_cache_reinit_(c, bits);
+	intern_cache_reinit_(C, c, bits);
 	int i;
 	for (i=0;i<collide_n;i++) {
 		intern_cache_insert_(c, collide[i], hash, ud);
@@ -171,16 +168,16 @@ intern_cache_resize_(struct intern_cache *c, int bits, hash_get_func hash, void 
 			intern_cache_insert_(c, index[i], hash, ud);
 		}
 	}
-	free(collide);
+	style_free(C, collide, size * 3 * sizeof(uint32_t));
 }
 
 static inline void
-intern_cache_insert(struct intern_cache *c, uint32_t index, hash_get_func hash, void *ud) {
+intern_cache_insert(struct intern_cache *c, uint32_t index, hash_get_func hash, void *ud, struct style_cache *C) {
 	verify_insert(c, index);
 	++c->n;
 	if (c->n >= c->size) {
 		int bits = 31 - c->shift;
-		intern_cache_resize_(c, bits+1, hash, ud);
+		intern_cache_resize_(c, bits+1, hash, ud, C);
 	}
 	intern_cache_insert_(c, index, hash, ud);
 }

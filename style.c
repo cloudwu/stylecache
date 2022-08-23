@@ -1,5 +1,6 @@
 #include "style.h"
 #include "attrib.h"
+#include "style_alloc.h"
 
 #include <stdint.h>
 #include <stdlib.h>
@@ -31,6 +32,8 @@ struct style {
 };
 
 struct style_cache {
+	style_alloc alloc;
+	void * alloc_ud;
 	struct attrib_state *A;
 	struct style *s;
 	style_handle_t empty;
@@ -42,11 +45,41 @@ struct style_cache {
 	unsigned char mask[MAX_KEY];
 };
 
+static void *
+default_alloc(void *ud, void *ptr, size_t osize, size_t nsize) {
+	if (nsize == 0) {
+		free(ptr);
+		return NULL;
+	} else {
+		return realloc(ptr, nsize);
+	}
+}
+
+void *
+style_malloc(struct style_cache *c, size_t size) {
+	return c->alloc(c->alloc_ud, NULL, 0, size);
+}
+
+void
+style_free(struct style_cache *c, void *ptr, size_t osize) {
+	c->alloc(c->alloc_ud, ptr, osize, 0);
+}
+
+void *
+style_realloc(struct style_cache *c, void *ptr, size_t osize, size_t nsize) {
+	return c->alloc(c->alloc_ud, ptr, osize, nsize);
+}
+
 struct style_cache *
-style_newcache(const unsigned char inherit_mask[128]) {
-	struct style_cache * c = (struct style_cache *)malloc(sizeof(*c));
-	c->A = attrib_newstate(inherit_mask);
-	c->s = (struct style *)malloc(ARENA_DEFAULT_SIZE * sizeof(struct style));
+style_newcache(const unsigned char inherit_mask[128], style_alloc alloc, void *alloc_ud) {
+	if (alloc == NULL) {
+		alloc = default_alloc;
+	}
+	struct style_cache * c = (struct style_cache *)alloc(alloc_ud, NULL, 0, sizeof(*c));
+	c->alloc = alloc;
+	c->alloc_ud = alloc_ud;
+	c->A = attrib_newstate(inherit_mask, c);
+	c->s = (struct style *)style_malloc(c, ARENA_DEFAULT_SIZE * sizeof(struct style));
 	c->n = 0;
 	c->cap = ARENA_DEFAULT_SIZE;
 	c->freelist = -1;
@@ -58,18 +91,11 @@ style_newcache(const unsigned char inherit_mask[128]) {
 
 void
 style_deletecache(struct style_cache *c) {
-	free(c->s);
-	attrib_close(c->A);
-	free(c);
-}
-
-size_t
-style_memsize(struct style_cache *C) {
-	size_t sz = sizeof(*C);
-	sz += C->cap * sizeof(struct style);
-	sz += attrib_memsize(C->A);
-
-	return sz;
+	if (c == NULL)
+		return;
+	style_free(c, c->s, c->cap * sizeof(struct style));
+	attrib_close(c->A, c);
+	style_free(c, c, sizeof(*c));
 }
 
 style_handle_t
@@ -87,7 +113,7 @@ alloc_style(struct style_cache *c) {
 	}
 	if (c->n >= c->cap) {
 		int newcap = c->cap * 3 / 2;
-		c->s = (struct style *)realloc(c->s, newcap * sizeof(struct style));
+		c->s = (struct style *)style_realloc(c, c->s, c->cap * sizeof(struct style), newcap * sizeof(struct style));
 		c->cap = newcap;
 	}
 	return c->n++;
@@ -128,9 +154,9 @@ style_create(struct style_cache *C, int n, struct style_attrib a[]) {
 	int tmp[MAX_KEY];
 	int i;
 	for (i=0;i<n;i++) {
-		tmp[i] = attrib_entryid(A, a[i].key, a[i].data, a[i].sz);
+		tmp[i] = attrib_entryid(A, a[i].key, a[i].data, a[i].sz, C);
 	}
-	attrib_t attr = attrib_create(A, n, tmp);
+	attrib_t attr = attrib_create(A, n, tmp, C);
 	int id = alloc_style(C);
 	struct style *s = &C->s[id];
 	s->a = -1;
@@ -166,7 +192,7 @@ make_dirty_tree(struct style_cache *C, int index) {
 		// already dirty
 		return;
 	}
-	attrib_release(C->A, s->value);
+	attrib_release(C->A, s->value, C);
 	s->value.idx = -1;
 	make_dirty_tree(C, s->affect_left);	
 	make_dirty_tree(C, s->affect_right);
@@ -206,7 +232,7 @@ style_modify(struct style_cache *C, style_handle_t h, int patch_n, struct style_
 		if (index < 0) {
 			if (patch[i].data) {
 				// new
-				int kv = attrib_entryid(A, patch[i].key, patch[i].data, patch[i].sz);
+				int kv = attrib_entryid(A, patch[i].key, patch[i].data, patch[i].sz, C);
 				tmp[n++] = kv;
 				assert(n <= MAX_KEY);
 				patch[i].change = 1;
@@ -217,7 +243,7 @@ style_modify(struct style_cache *C, style_handle_t h, int patch_n, struct style_
 		} else {
 			if (patch[i].data) {
 				// replace
-				int kv = attrib_entryid(A, patch[i].key, patch[i].data, patch[i].sz);
+				int kv = attrib_entryid(A, patch[i].key, patch[i].data, patch[i].sz, C);
 				if (tmp[index] != kv) {
 					change = 1;
 					patch[i].change = 1;
@@ -247,8 +273,8 @@ style_modify(struct style_cache *C, style_handle_t h, int patch_n, struct style_
 			--n2;
 		}
 	}
-	attrib_t new_attr = attrib_create(A, n2, tmp);
-	attrib_release(A, s->value);
+	attrib_t new_attr = attrib_create(A, n2, tmp, C);
+	attrib_release(A, s->value, C);
 	s->value = new_attr;
 	make_dirty(C, s);
 	return 1;
@@ -287,7 +313,7 @@ eval_(struct style_cache *C, style_handle_t h) {
 	struct style *a = get_style(C, ah.idx);
 	struct style *b = get_style(C, bh.idx);
 
-	s->value = attrib_inherit(C->A, a->value, b->value, s->withmask);
+	s->value = attrib_inherit(C->A, a->value, b->value, s->withmask, C);
 }
 
 void
@@ -299,7 +325,7 @@ style_assign(struct style_cache *C, style_handle_t h, style_handle_t v) {
 	attrib_t attr = attrib_addref(C->A, vv->value);
 	if (attr.idx == s->value.idx)	// no change
 		return;
-	attrib_release(C->A, s->value);
+	attrib_release(C->A, s->value, C);
 	s->value = attr;
 	make_dirty(C, s);
 }
@@ -468,6 +494,24 @@ style_flush(struct style_cache *C) {
 
 #ifdef STYLE_TEST_MAIN
 
+struct test_alloc {
+	size_t sz;
+};
+
+static void *
+test_alloc_func(void *ud, void *ptr, size_t osize, size_t nsize) {
+	struct test_alloc *a = (struct test_alloc *)ud;
+	if (nsize == 0) {
+		a->sz -= osize;
+		free(ptr);
+		return NULL;
+	} else {
+		a->sz += nsize;
+		a->sz -= osize;
+		return realloc(ptr, nsize);
+	}
+}
+
 #define STR(s) s, sizeof(s"")
 
 static void
@@ -490,7 +534,8 @@ print_handle(struct style_cache *C, style_handle_t handle) {
 int
 main() {
 	unsigned char inherit_mask[MAX_KEY] = { 0 };
-	struct style_cache * C = style_newcache(inherit_mask);
+	struct test_alloc info;
+	struct style_cache * C = style_newcache(inherit_mask, test_alloc_func, &info);
 
 	struct style_attrib a[] = {
 		{ STR("hello") ,1 },
@@ -542,6 +587,8 @@ main() {
 	style_flush(C);
 
 	style_deletecache(C);
+
+	assert(info.sz == 0);
 
 	return 0;
 }

@@ -6,6 +6,7 @@
 #include <string.h>
 #include <assert.h>
 #include "hash.h" 
+#include "style_alloc.h"
 
 #define INHERIT_CACHE_INVALID_KEY 0xffffffff
 #define INHERIT_CACHE_SIZE (1<<13)// 8192, 13bits
@@ -38,8 +39,8 @@ inherit_cache_init(struct inherit_cache *c) {
 }
 
 static inline void
-inherit_cache_deinit(struct inherit_cache *c) {
-	free(c->version);
+inherit_cache_deinit(struct style_cache *C, struct inherit_cache *c) {
+	style_free(C, c->version, c->n * sizeof(uint16_t));
 }
 
 static inline int
@@ -85,7 +86,7 @@ inherit_cache_retirekey(struct inherit_cache *c, int key) {
 }
 
 static inline void
-resize_inherit_cache(struct inherit_cache *c, int a, int b, int result) {
+resize_inherit_cache(struct inherit_cache *c, int a, int b, int result, struct style_cache *C) {
 	int size = INHERIT_CACHE_SIZE;
 	if (c->n > size)
 		size = c->n;
@@ -93,18 +94,18 @@ resize_inherit_cache(struct inherit_cache *c, int a, int b, int result) {
 	while (size < b) size *= 2;
 	while (size < result) size *= 2;
 	if (size > c->n) {
-		uint16_t * v = (uint16_t *)malloc(size * sizeof(uint16_t));
+		uint16_t * v = (uint16_t *)style_malloc(C, size * sizeof(uint16_t));
 		memset(v, 0, sizeof(uint16_t) * size);
 		memcpy(v, c->version, sizeof(uint16_t) * c->n);
-		free(c->version);
+		style_free(C, c->version, c->n * sizeof(uint16_t));
 		c->version = v;
 		c->n = size;
 	}
 }
 
 static inline void
-inherit_cache_set(struct inherit_cache *c, int a, int b, int withmask, int result) {
-	resize_inherit_cache(c, a, b, result);
+inherit_cache_set(struct inherit_cache *c, int a, int b, int withmask, int result, struct style_cache *C) {
+	resize_inherit_cache(c, a, b, result, C);
 	int v = hash_inherit_combined_slot(a,b);
 	struct inherit_entry *e = &c->s[v];
 	e->a = a;
