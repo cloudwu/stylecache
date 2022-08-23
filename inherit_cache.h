@@ -93,7 +93,7 @@ resize_inherit_cache(struct inherit_cache *c, int a, int b, int result) {
 	while (size < b) size *= 2;
 	while (size < result) size *= 2;
 	if (size > c->n) {
-		uint16_t * v = (uint16_t *)realloc(c->version, size * sizeof(uint16_t));
+		uint16_t * v = (uint16_t *)malloc(size * sizeof(uint16_t));
 		memset(v, 0, sizeof(uint16_t) * size);
 		memcpy(v, c->version, sizeof(uint16_t) * c->n);
 		free(c->version);
