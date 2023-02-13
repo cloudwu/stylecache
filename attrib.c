@@ -208,16 +208,12 @@ attrib_array_size(int n) {
 
 static void
 tuple_deinit(struct attrib_tuple *tuple, struct style_cache *C) {
-	int node = tuple->freelist;
-	while (node >= 0) {
-		int current = node;
-		node = tuple->s[current].next;
-		tuple->s[current].a = NULL;
-	}
 	int i;
 	for (i=0;i<tuple->n;i++) {
 		struct attrib_array *a = tuple->s[i].a;
-		style_free(C, a, attrib_array_size(a->n));
+		if (a) {
+			style_free(C, a, attrib_array_size(a->n));
+		}
 	}
 	style_free(C, tuple->s, tuple->cap * sizeof(union attrib_tuple_entry));
 }
