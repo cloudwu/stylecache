@@ -34,4 +34,6 @@ void style_flush(struct style_cache *);
 void* style_find(struct style_cache *C, style_handle_t h, uint8_t key);
 void* style_index(struct style_cache *, style_handle_t h, int i, uint8_t *key);
 
+void style_dump_key(struct style_cache *C, style_handle_t h, uint8_t key, char fmt);
+
 #endif

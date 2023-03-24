@@ -387,6 +387,55 @@ style_find(struct style_cache *C, style_handle_t h, uint8_t key) {
 	return attrib_index(C->A, a, index, &key);
 }
 
+static void
+dump_key(int indent, struct style_cache *C, int style_id, uint8_t key, char fmt) {
+	if (style_id < 0)
+		return;
+	printf("%*s[%d] ", indent, "", style_id);
+	struct style *s = get_style(C, style_id);
+	if (s->value.idx < 0) {
+		printf("DIRTY\n");
+	} else {
+		attrib_t a = s->value;
+		int index = attrib_find(C->A, a, key);
+		if (index < 0) {
+			printf("%d\n", a.idx);
+		} else {
+			void *p = attrib_index(C->A, a, index, &key);
+			printf("%d : ", a.idx);
+			switch (fmt) {
+			case 's':
+				printf("%s", (const char *)p);
+				break;
+			case 'd':
+				printf("%d", *(int *)p);
+				break;
+			case 'x':
+				printf("%p", *(void **)p);
+				break;
+			case 'f':
+				printf("%f", *(float *)p);
+				break;
+			case 'F':
+				printf("%lf", *(double *)p);
+				break;
+			case 'p':
+			default:
+				printf("%p", p);
+				break;
+			}
+			printf("\n");
+		}
+	}
+	dump_key(indent+2, C, s->a, key, fmt);
+	dump_key(indent+2, C, s->b, key, fmt);
+}
+
+void
+style_dump_key(struct style_cache *C, style_handle_t h, uint8_t key, char fmt) {
+	dump_key(0, C, h.idx, key, fmt);
+}
+
 void*
 style_index(struct style_cache *C, style_handle_t h, int i, uint8_t *key) {
 	attrib_t a = get_value(C, h);
@@ -573,12 +622,16 @@ main() {
 	printf("H1 = %d, h3 = %d\n", h1.idx, h3.idx);
 
 	style_modify(C, h1, sizeof(patch)/sizeof(patch[0]), patch);
-	
+
+	style_dump_key(C, h3, 1, 's');
+
 	print_handle(C, h3);
 
 	style_handle_t h5 = style_null(C);
 
 	h5 = style_inherit(C, h5, h3, 0);
+
+	style_dump_key(C, h5, 1, 'p');
 
 	print_handle(C, h5);
 
