@@ -1,6 +1,7 @@
 #include "style.h"
 #include "attrib.h"
 #include "style_alloc.h"
+#include "dirtylist.h"
 
 #include <stdint.h>
 #include <stdlib.h>
@@ -23,10 +24,7 @@ struct style {
 	attrib_t value;
 	int prev;
 	int next;
-	int next_left;
-	int next_right;
-	int affect_left;
-	int affect_right;
+	int affect;
 	int refcount:31;
 	int withmask:1;
 };
@@ -36,6 +34,7 @@ struct style_cache {
 	void * alloc_ud;
 	struct attrib_state *A;
 	struct style *s;
+	struct dirtylist *D;
 	style_handle_t empty;
 	int n;
 	int cap;
@@ -80,6 +79,7 @@ style_newcache(const unsigned char inherit_mask[128], style_alloc alloc, void *a
 	c->alloc_ud = alloc_ud;
 	c->A = attrib_newstate(inherit_mask, c);
 	c->s = (struct style *)style_malloc(c, ARENA_DEFAULT_SIZE * sizeof(struct style));
+	c->D = NULL;
 	c->n = 0;
 	c->cap = ARENA_DEFAULT_SIZE;
 	c->freelist = -1;
@@ -95,6 +95,7 @@ style_deletecache(struct style_cache *c) {
 		return;
 	style_free(c, c->s, c->cap * sizeof(struct style));
 	attrib_close(c->A, c);
+	dirtylist_release(c->D, c);
 	style_free(c, c, sizeof(*c));
 }
 
@@ -166,10 +167,7 @@ style_create(struct style_cache *C, int n, struct style_attrib a[]) {
 
 	link_to(C, id, &C->live);
 
-	s->next_left = -1;
-	s->next_right = -1;
-	s->affect_left = -1;
-	s->affect_right = -1;
+	s->affect = -1;
 
 	style_handle_t r = { id };
 	return r;
@@ -184,26 +182,22 @@ get_style(struct style_cache *C, int index) {
 }
 
 static void
-make_dirty_tree(struct style_cache *C, int index) {
-	if (index < 0)
-		return;
-	struct style *s = get_style(C, index);
-	if (s->value.idx < 0) {
-		// already dirty
-		return;
+make_dirty_list(struct style_cache *C, int *head) {
+	int index;
+	while ((head = dirtylist_next(C->D, head, &index))) {
+		struct style *s = get_style(C, index);
+		if (s->value.idx >= 0) {
+			attrib_release(C->A, s->value, C);
+			s->value.idx = -1;
+			make_dirty_list(C, &s->affect);
+		}
 	}
-	attrib_release(C->A, s->value, C);
-	s->value.idx = -1;
-	make_dirty_tree(C, s->affect_left);	
-	make_dirty_tree(C, s->affect_right);
-	make_dirty_tree(C, s->next_left);
-	make_dirty_tree(C, s->next_right);
 }
 
-static void
-make_dirty(struct style_cache *C, struct style *s) {
-	make_dirty_tree(C, s->affect_left);
-	make_dirty_tree(C, s->affect_right);
+static inline void
+make_dirty(struct style_cache *C, struct style *s, int id) {
+	(void)id;	// unused (reserved for debug)
+	make_dirty_list(C, &s->affect);
 	assert(s->value.idx >= 0);
 }
 
@@ -276,7 +270,7 @@ style_modify(struct style_cache *C, style_handle_t h, int patch_n, struct style_
 	attrib_t new_attr = attrib_create(A, n2, tmp, C);
 	attrib_release(A, s->value, C);
 	s->value = new_attr;
-	make_dirty(C, s);
+	make_dirty(C, s, h.idx);
 	return 1;
 }
 
@@ -327,7 +321,7 @@ style_assign(struct style_cache *C, style_handle_t h, style_handle_t v) {
 		return;
 	attrib_release(C->A, s->value, C);
 	s->value = attr;
-	make_dirty(C, s);
+	make_dirty(C, s, h.idx);
 }
 
 static inline void
@@ -339,6 +333,20 @@ addref(struct style_cache *C, int index) {
 	}
 }
 
+static void
+add_affect(struct style_cache *C, int a, int b) {
+	if (a < 0)
+		return;
+	struct style *s = get_style(C, a);
+	int index = dirtylist_add(C->D, a, b, s->affect);
+	if (index < 0) {
+		C->D = dirtylist_expand(C->D, C);
+		index = dirtylist_add(C->D, a, b, s->affect);
+		assert(index >= 0);
+	}
+	s->affect = index;
+}
+
 style_handle_t
 style_inherit(struct style_cache *C, style_handle_t child, style_handle_t parent, int with_mask) {
 	int id = alloc_style(C);
@@ -348,23 +356,15 @@ style_inherit(struct style_cache *C, style_handle_t child, style_handle_t parent
 	s->value.idx = -1;
 	s->refcount = 0;
 	s->withmask = with_mask;
+	s->affect = -1;
 
 	link_to(C, id, &C->dead);
 
 	addref(C, child.idx);
 	addref(C, parent.idx);
 
-	struct style *left = get_style(C, child.idx);
-	struct style *right = get_style(C, parent.idx);
-
-	s->affect_left = -1;
-	s->affect_right = -1;
-
-	s->next_left = left->affect_left;
-	left->affect_left = id;
-
-	s->next_right = right->affect_right;
-	right->affect_right = id;
+	add_affect(C, s->a, id);
+	add_affect(C, s->b, id);
 
 	style_handle_t r = { id };
 	return r;
@@ -442,63 +442,6 @@ style_index(struct style_cache *C, style_handle_t h, int i, uint8_t *key) {
 	return attrib_index(C->A, a, i, key);
 }
 
-static void
-remove_linked_left(struct style_cache *C, int head, int linked_index, int linked_left) {
-	assert(head >= 0);
-	struct style *s = &C->s[head];
-	if (s->next_left == linked_index)
-		s->next_left = linked_left;
-	else
-		remove_linked_left(C, s->next_left, linked_index, linked_left);
-}
-
-static void
-clear_affect_left(struct style_cache *C, int index, int linked_index, int linked_left) {
-	struct style *s = &C->s[index];
-	if (s->refcount < 0)
-		return;
-	int left_head = s->affect_left;
-	assert(left_head >= 0);
-	if (left_head == linked_index) {
-		s->affect_left = linked_left;
-	} else {
-		remove_linked_left(C, left_head, linked_index, linked_left);
-	}
-}
-
-static void
-remove_linked_right(struct style_cache *C, int head, int linked_index, int linked_right) {
-	assert(head >= 0);
-	struct style *s = &C->s[head];
-	if (s->next_right == linked_index)
-		s->next_right = linked_right;
-	else
-		remove_linked_right(C, s->next_right, linked_index, linked_right);
-}
-
-static void
-clear_affect_right(struct style_cache *C, int index, int linked_index, int linked_right) {
-	struct style *s = &C->s[index];
-	if (s->refcount < 0)
-		return;
-	int right_head = s->affect_right;
-	assert(right_head >= 0);
-	if (right_head == linked_index) {
-		s->affect_right = linked_right;
-	} else {
-		remove_linked_right(C, right_head, linked_index, linked_right);
-	}
-}
-
-static void
-clear_affect(struct style_cache *C, int id) {
-	struct style *s = &C->s[id];
-	if (s->a >= 0)
-		clear_affect_left(C, s->a, id, s->next_left);
-	if (s->b >= 0)
-		clear_affect_right(C, s->b, id, s->next_right);
-}
-
 void
 style_flush(struct style_cache *C) {
 	int dead = C->dead;
@@ -530,7 +473,7 @@ style_flush(struct style_cache *C) {
 
 	for (;;) {
 		struct style *s = &C->s[dead];
-		clear_affect(C, dead);
+		dirtylist_clear(C->D, dead);
 		if (s->next < 0) {
 			s->next = C->freelist;
 			C->freelist = C->dead;
