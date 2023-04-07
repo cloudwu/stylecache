@@ -207,8 +207,19 @@ attrib_array_size(int n) {
 }
 
 static void
+clear_freelist(struct attrib_tuple *tuple) {
+	int index = tuple->freelist;
+	while (index >= 0) {
+		int next = tuple->s[index].next;
+		tuple->s[index].a = NULL;
+		index = next;
+	}
+}
+
+static void
 tuple_deinit(struct attrib_tuple *tuple, struct style_cache *C) {
 	int i;
+	clear_freelist(tuple);
 	for (i=0;i<tuple->n;i++) {
 		struct attrib_array *a = tuple->s[i].a;
 		if (a) {
