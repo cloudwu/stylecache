@@ -76,7 +76,7 @@ dirtylist_clear(struct dirtylist *D, int a) {
 		return;
 	int i;
 	int freelist = -1;
-	int last = 1;
+	int last = -1;
 	for (i=0;i<D->n;i++) {
 		struct dirtypair * p = &D->p[i];
 		if (p->a >= 0) {
