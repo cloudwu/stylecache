@@ -76,7 +76,6 @@ dirtylist_clear(struct dirtylist *D, int a) {
 		return;
 	int i;
 	int freelist = -1;
-	int last = -1;
 	for (i=0;i<D->n;i++) {
 		struct dirtypair * p = &D->p[i];
 		if (p->a >= 0) {
@@ -85,7 +84,6 @@ dirtylist_clear(struct dirtylist *D, int a) {
 				p->next = freelist;
 				freelist = i;
 			} else {
-				last = i;
 				if (p->b == a) {
 					// mark only, returns to freelist during dirtylist_next
 					p->b = -1;
@@ -94,7 +92,6 @@ dirtylist_clear(struct dirtylist *D, int a) {
 		}
 	}
 	D->freelist = freelist;
-	D->n = last + 1;
 }
 
 int*
