@@ -11,5 +11,6 @@ int dirtylist_add(struct dirtylist *, int a, int b, int next);
 void dirtylist_clear(struct dirtylist *, int a);
 int* dirtylist_next(struct dirtylist *, int *index, int *value);
 void dirtylist_dump(struct dirtylist *);
+void dirtylist_check(struct dirtylist *, int index, int v);
 
 #endif

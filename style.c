@@ -442,6 +442,25 @@ style_index(struct style_cache *C, style_handle_t h, int i, uint8_t *key) {
 	return attrib_index(C->A, a, i, key);
 }
 
+static void
+check_affect(struct style_cache *C, struct style *s) {
+	if (s->affect < 0)
+		return;
+	int id = s - C->s;
+	dirtylist_check(C->D, s->affect, id);
+}
+
+// for debug
+static inline void
+check_alive(struct style_cache *C) {
+	int live = C->live;
+	while (live >= 0) {
+		struct style *s = &C->s[live];
+		check_affect(C, s);
+		live = s->next;
+	}
+}
+
 void
 style_flush(struct style_cache *C) {
 	int dead = C->dead;
@@ -482,6 +501,7 @@ style_flush(struct style_cache *C) {
 		}
 		dead = s->next;
 	}
+//	check_alive(C);
 }
 
 #ifdef STYLE_TEST_MAIN

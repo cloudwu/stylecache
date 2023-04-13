@@ -104,19 +104,26 @@ dirtylist_next(struct dirtylist *D, int *index, int *value) {
 		return NULL;
 	struct dirtypair * p = &D->p[current];
 	while (p->b < 0) {
-		current = p->next;
-		p->next = D->freelist;
+		int next = p->next;
 		p->a = -1;
+		p->next = D->freelist;
 		D->freelist = current;
-		if (current < 0) {
+		if (next < 0) {
 			*index = -1;
 			return NULL;
 		}
-		p = &D->p[current];
+		p = &D->p[next];
+		current = next;
 	}
 	*index = current;
 	*value = p->b;
 	return &(p->next);
+}
+
+void
+dirtylist_check(struct dirtylist *D, int index, int v) {
+	struct dirtypair * p = &D->p[index];
+	assert(p->a == v);
 }
 
 #include <stdio.h>
