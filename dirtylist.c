@@ -89,6 +89,9 @@ dirtylist_clear(struct dirtylist *D, int a) {
 					p->b = -1;
 				}
 			}
+		} else {
+			p->next = freelist;
+			freelist = i;
 		}
 	}
 	D->freelist = freelist;
