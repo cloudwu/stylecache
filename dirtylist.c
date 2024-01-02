@@ -76,35 +76,25 @@ dirtylist_clear(struct dirtylist *D, int a) {
 		return;
 	int i;
 	int freelist = -1;
-	int return_freelist = 0;
-	int top = D->n;
-	for (i=top-1;i>=0;i--) {
+	for (i=0;i<D->n;i++) {
 		struct dirtypair * p = &D->p[i];
 		if (p->a >= 0) {
 			if (p->a == a) {
-				if (return_freelist) {
-					p->a = -1;
-					p->next = freelist;
-					freelist = i;
-				} else {
-					top = i;
-				}
+				p->a = -1;
+				p->next = freelist;
+				freelist = i;
 			} else {
-				return_freelist = 1;
 				if (p->b == a) {
 					// mark only, returns to freelist during dirtylist_next
 					p->b = -1;
 				}
 			}
-		} else if (return_freelist) {
+		} else {
 			p->next = freelist;
 			freelist = i;
-		} else {
-			top = i;
 		}
 	}
 	D->freelist = freelist;
-	D->n = top;
 }
 
 int*
@@ -124,16 +114,6 @@ dirtylist_next(struct dirtylist *D, int *index, int *value) {
 		}
 		p = &D->p[next];
 		current = next;
-	}
-	int freeslot = D->freelist;
-	if (freeslot < current && freeslot >= 0) {
-		// move it up to the front
-		struct dirtypair *n = &D->p[freeslot];
-		D->freelist = n->next;
-		*n = *p;
-		p->a = -1;	// mark free, recycle in dirtylist_clear()
-		current = freeslot;
-		p = n;
 	}
 	*index = current;
 	*value = p->b;
