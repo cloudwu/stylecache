@@ -16,15 +16,12 @@
 
 // Every styles created in current frame are linked in .prev/.next
 // freelist linked in .next
-// If the style is A * B, put style in A.affect_left, or in the .next_left list of A.affect_left
-// and put style in A.affect_right, or in the .next_right list of B.affect_right
 struct style {
 	int a;
 	int b;
 	attrib_t value;
 	int prev;
 	int next;
-	int affect;
 	int refcount:31;
 	int withmask:1;
 };
@@ -79,7 +76,7 @@ style_newcache(const unsigned char inherit_mask[128], style_alloc alloc, void *a
 	c->alloc_ud = alloc_ud;
 	c->A = attrib_newstate(inherit_mask, c);
 	c->s = (struct style *)style_malloc(c, ARENA_DEFAULT_SIZE * sizeof(struct style));
-	c->D = NULL;
+	c->D = dirtylist_create(c);
 	c->n = 0;
 	c->cap = ARENA_DEFAULT_SIZE;
 	c->freelist = -1;
@@ -95,7 +92,7 @@ style_deletecache(struct style_cache *c) {
 		return;
 	style_free(c, c->s, c->cap * sizeof(struct style));
 	attrib_close(c->A, c);
-	dirtylist_release(c->D, c);
+	dirtylist_release(c->D);
 	style_free(c, c, sizeof(*c));
 }
 
@@ -167,8 +164,6 @@ style_create(struct style_cache *C, int n, struct style_attrib a[]) {
 
 	link_to(C, id, &C->live);
 
-	s->affect = -1;
-
 	style_handle_t r = { id };
 	return r;
 }
@@ -181,23 +176,42 @@ get_style(struct style_cache *C, int index) {
 	return s;
 }
 
-static void
-make_dirty_list(struct style_cache *C, int *head) {
-	int index;
-	while ((head = dirtylist_next(C->D, head, &index))) {
+#define DIRTYLIST_MAX 4096
+
+static void make_dirty_list(struct style_cache *C, int id);
+
+static inline void
+make_dirty_(struct style_cache *C, int n, const int *array) {
+	int i;
+	for (i=0;i<n;i++) {
+		int index = array[i];
 		struct style *s = get_style(C, index);
 		if (s->value.idx >= 0) {
 			attrib_release(C->A, s->value, C);
 			s->value.idx = -1;
-			make_dirty_list(C, &s->affect);
+			make_dirty_list(C, index);
 		}
+	}
+}
+
+static void
+make_dirty_list(struct style_cache *C, int id) {
+	int tmp[DIRTYLIST_MAX];
+	int n = dirtylist_get(C->D, id, DIRTYLIST_MAX, tmp);
+	if (n <= DIRTYLIST_MAX) {
+		make_dirty_(C, n, tmp);
+	} else {
+		int * r = (int *)malloc(n * sizeof(int));
+		dirtylist_get(C->D, id, n, r);
+		make_dirty_(C, n, r);
+		free(r);
 	}
 }
 
 static inline void
 make_dirty(struct style_cache *C, struct style *s, int id) {
-	(void)id;	// unused (reserved for debug)
-	make_dirty_list(C, &s->affect);
+	(void)s;	// unused (reserved for debug)
+	make_dirty_list(C, id);
 	assert(s->value.idx >= 0);
 }
 
@@ -337,14 +351,7 @@ static void
 add_affect(struct style_cache *C, int a, int b) {
 	if (a < 0)
 		return;
-	struct style *s = get_style(C, a);
-	int index = dirtylist_add(C->D, a, b, s->affect);
-	if (index < 0) {
-		C->D = dirtylist_expand(C->D, C);
-		index = dirtylist_add(C->D, a, b, s->affect);
-		assert(index >= 0);
-	}
-	s->affect = index;
+	dirtylist_add(C->D, a, b);
 }
 
 style_handle_t
@@ -356,7 +363,6 @@ style_inherit(struct style_cache *C, style_handle_t child, style_handle_t parent
 	s->value.idx = -1;
 	s->refcount = 0;
 	s->withmask = with_mask;
-	s->affect = -1;
 
 	link_to(C, id, &C->dead);
 
@@ -442,25 +448,6 @@ style_index(struct style_cache *C, style_handle_t h, int i, uint8_t *key) {
 	return attrib_index(C->A, a, i, key);
 }
 
-static void
-check_affect(struct style_cache *C, struct style *s) {
-	if (s->affect < 0)
-		return;
-	int id = s - C->s;
-	dirtylist_check(C->D, s->affect, id);
-}
-
-// for debug
-static inline void
-check_alive(struct style_cache *C) {
-	int live = C->live;
-	while (live >= 0) {
-		struct style *s = &C->s[live];
-		check_affect(C, s);
-		live = s->next;
-	}
-}
-
 void
 style_flush(struct style_cache *C) {
 	int dead = C->dead;
@@ -501,7 +488,6 @@ style_flush(struct style_cache *C) {
 		}
 		dead = s->next;
 	}
-//	check_alive(C);
 }
 
 #ifdef STYLE_TEST_MAIN

@@ -5,125 +5,145 @@
 
 #define DIRTYLIST_INITSIZE 1024
 
-struct dirtypair {
-	int a;
+struct dirtyslot {
+	unsigned int version;
 	int b;
 	int next;
 };
 
+struct dirtyhead {
+	unsigned int version;
+	int head;
+};
+
 struct dirtylist {
+	struct style_cache *C;
 	int cap;
 	int n;
 	int freelist;
-	struct dirtypair p[1];
+	int maxid;
+	struct dirtyhead *h;
+	struct dirtyslot *p;
 };
 
 struct dirtylist *
-dirtylist_expand(struct dirtylist *D, struct style_cache *C) {
-	if (D == NULL) {
-		int cap = DIRTYLIST_INITSIZE;
-		size_t sz = sizeof(*D) + (cap - 1) * sizeof(struct dirtypair);
-		D = (struct dirtylist *)style_malloc(C, sz);
-		D->cap = cap;
-		D->n = 0;
-		D->freelist = -1;
-		return D;
+dirtylist_create(struct style_cache *C) {
+	struct dirtylist *D = (struct dirtylist *)style_malloc(C, sizeof(*D));
+	D->C = C;
+	D->cap = DIRTYLIST_INITSIZE;
+	D->n = 0;
+	D->freelist = -1;
+	D->maxid = DIRTYLIST_INITSIZE;
+	D->h = (struct dirtyhead *)style_malloc(C, D->maxid * sizeof(struct dirtyhead));
+	int i;
+	for (i=0;i<D->maxid;i++) {
+		D->h[i].head = -1;
+		D->h[i].version = 0;
 	}
-	int cap = D->cap * 3 / 2;
-	size_t osz = sizeof(*D) + (D->cap - 1) * sizeof(struct dirtypair); 
-	size_t sz = sizeof(*D) + (cap - 1) * sizeof(struct dirtypair);
-	struct dirtylist * ret = (struct dirtylist *)style_realloc(C, D, osz, sz);
-	if (ret == NULL)
-		return D;
-	ret->cap = cap;
-	return ret;
+	D->p = (struct dirtyslot *)style_malloc(C, D->cap * sizeof(struct dirtyslot));
+	return D;
+}
+void
+dirtylist_release(struct dirtylist *D) {
+	if (D == NULL)
+		return;
+	struct style_cache *C = D->C;
+	style_free(C, D->h, D->maxid * sizeof(struct dirtyhead));
+	style_free(C, D->p, D->cap * sizeof(struct dirtyslot));
+	style_free(C, D, sizeof(*D));
 }
 
 void
-dirtylist_release(struct dirtylist *D, struct style_cache *C) {
-	if (D == NULL)
-		return;
-	size_t sz = sizeof(*D) + (D->cap - 1) * sizeof(struct dirtypair);
-	style_free(C, D, sz);
-}
-
-int
-dirtylist_add(struct dirtylist *D, int a, int b, int next) {
-	if (D == NULL) {
-		return -1;
+dirtylist_add(struct dirtylist *D, int a, int b) {
+	int maxid = D->maxid;
+	while (a >= maxid || b >= maxid) {
+		maxid = maxid * 3 / 2;
+	}
+	if (maxid > D->maxid) {
+		D->h = (struct dirtyhead *)style_realloc(D->C, D->h, D->maxid * sizeof(struct dirtyhead),
+			maxid * sizeof(struct dirtyhead));
+		int i;
+		for (i=D->maxid;i<maxid;i++) {
+			D->h[i].head = -1;
+			D->h[i].version = 0;
+		}
+		D->maxid = maxid;
 	}
 	int index = D->freelist;
-	struct dirtypair * p;
+	struct dirtyslot * p;
 	if (index >= 0) {
 		p = &D->p[index];
 		D->freelist = p->next;
-	} else if (D->n < D->cap) {
+	} else {
+		if (D->n >= D->cap) {
+			int cap = D->cap * 3 / 2;
+			D->p = (struct dirtyslot *)style_realloc(D->C, D->p, D->cap * sizeof(struct dirtyslot),
+				cap * sizeof(struct dirtyslot));
+			D->cap = cap;
+		}
 		index = D->n++;
 		p = &D->p[index];
-	} else {
-		return -1;
 	}
 	assert(a >= 0 && b >= 0);
-	p->a = a;
+	struct dirtyhead * h = &D->h[a];
+	p->version = h->version;
 	p->b = b;
-	p->next = next;
-	return index;
+	p->next = h->head;
+	h->head = index;
 }
 
 void
 dirtylist_clear(struct dirtylist *D, int a) {
-	if (D == NULL)
+	assert(a >= 0 && a < D->maxid);
+	struct dirtyhead * h = &D->h[a];
+	++h->version;
+	int index = h->head;
+	if (index < 0)
 		return;
-	int i;
-	int freelist = -1;
-	for (i=0;i<D->n;i++) {
-		struct dirtypair * p = &D->p[i];
-		if (p->a >= 0) {
-			if (p->a == a) {
-				p->a = -1;
-				p->next = freelist;
-				freelist = i;
-			} else {
-				if (p->b == a) {
-					// mark only, returns to freelist during dirtylist_next
-					p->b = -1;
-				}
-			}
-		} else {
-			p->next = freelist;
-			freelist = i;
+	int freelist = index;
+	h->head = -1;
+	for (;;) {
+		struct dirtyslot * p = &D->p[index];
+		index = p->next;
+		if (index < 0) {
+			p->next = D->freelist;
+			break;
 		}
 	}
 	D->freelist = freelist;
 }
 
-int*
-dirtylist_next(struct dirtylist *D, int *index, int *value) {
-	int current = *index;
-	if (current < 0)
-		return NULL;
-	struct dirtypair * p = &D->p[current];
-	while (p->b < 0) {
-		int next = p->next;
-		p->a = -1;
-		p->next = D->freelist;
-		D->freelist = current;
-		if (next < 0) {
-			*index = -1;
-			return NULL;
-		}
-		p = &D->p[next];
-		current = next;
-	}
-	*index = current;
-	*value = p->b;
-	return &(p->next);
+static inline int
+alive(struct dirtylist *D, struct dirtyslot * p) {
+	struct dirtyhead * h = &D->h[p->b];
+	return h->version == p->version;
 }
 
-void
-dirtylist_check(struct dirtylist *D, int index, int v) {
-	struct dirtypair * p = &D->p[index];
-	assert(p->a == v);
+int
+dirtylist_get(struct dirtylist *D, int id, int n, int *output) {
+	assert (id >= 0 || id < D->maxid);
+	struct dirtyhead * h = &D->h[id];
+	int index = h->head;
+	if (index < 0)
+		return 0;
+	int *list = &h->head;
+	int count = 0;
+	for (;;) {
+		struct dirtyslot * p = &D->p[index];
+		if (alive(D, p)) {
+			if (count < n) {
+				output[count++] = p->b;
+			}
+			list = &p->next;
+		} else {
+			*list = p->next;
+			p->next = D->freelist;
+			D->freelist = index;
+		}
+		index = *list;
+		if (index < 0)
+			return count;
+	}
 }
 
 #include <stdio.h>
@@ -131,11 +151,21 @@ dirtylist_check(struct dirtylist *D, int index, int v) {
 void
 dirtylist_dump(struct dirtylist *D) {
 	int i;
-	for (i=0;i<D->n;i++) {
-		struct dirtypair * p = &D->p[i];
-		if (p->a >= 0) {
-			printf("[%d] : %d -> %d (%d)\n",
-				i, p->a, p->b, p->next);
+	for (i=0;i<D->maxid;i++) {
+		struct dirtyhead * h = &D->h[i];
+		int index = h->head;
+		if (index >= 0) {
+			printf("[%d] : ", i);
+			for (;;) {
+				struct dirtyslot *p = &D->p[index];
+				if (alive(D, p)) {
+					printf("%d ", p->b);
+				}
+				index = p->next;
+				if (index < 0)
+					break;
+			}
+			printf("\n");
 		}
 	}
 }
@@ -145,11 +175,13 @@ dirtylist_dump(struct dirtylist *D) {
 #include "style.h"
 
 static void
-print_list(struct dirtylist *D, int *head, int v) {
-	int value;
+print_list(struct dirtylist *D, int v) {
+	int tmp[4096];
+	int i;
+	int n = dirtylist_get(D, v, 4096, tmp);
 	printf("%d : ", v);
-	while ((head = dirtylist_next(D, head, &value))) {
-		printf("%d ", value);
+	for (i=0;i<n;i++) {
+		printf("%d ", tmp[i]);
 	}
 	printf("\n");
 }
@@ -157,32 +189,29 @@ print_list(struct dirtylist *D, int *head, int v) {
 int
 main() {
 	struct style_cache *C = style_newcache(NULL, NULL, NULL);
-	struct dirtylist * D = dirtylist_expand(NULL, C);
+	struct dirtylist * D = dirtylist_create(C);
 
-	int head[4] = { -1, -1 , -1, -1 };
+	dirtylist_add(D, 0, 1);	// add 0->1
+	dirtylist_add(D, 0, 2);	// add 0->2
+	dirtylist_add(D, 0, 3);	// add 0->3
 
-	head[0] = dirtylist_add(D, 0, 1, head[0]);	// add 0->1
-	head[0] = dirtylist_add(D, 0, 2, head[0]);	// add 0->2
-	head[0] = dirtylist_add(D, 0, 3, head[0]);	// add 0->3
+	dirtylist_add(D, 1, 2);	// add 1->2
 
-	head[1] = dirtylist_add(D, 1, 2, head[1]);	// add 1->2
+	dirtylist_add(D, 2, 3);	// add 2->3
+	dirtylist_add(D, 2, 0);	// add 2->0
 
-	head[2] = dirtylist_add(D, 2, 3, head[2]);	// add 2->3
-	head[2] = dirtylist_add(D, 2, 0, head[1]);	// add 2->0
-
-	print_list(D, &head[0], 0);
-	print_list(D, &head[1], 1);
-	print_list(D, &head[2], 2);
+	print_list(D, 0);
+	print_list(D, 1);
+	print_list(D, 2);
 	dirtylist_dump(D);
 
 	dirtylist_clear(D, 2);
-	head[2] = -1;
 
-	print_list(D, &head[1], 1);
-	print_list(D, &head[0], 0);
+	print_list(D, 1);
+	print_list(D, 0);
 	dirtylist_dump(D);
 
-	dirtylist_release(D, C);
+	dirtylist_release(D);
 
 	return 0;
 }
