@@ -22,7 +22,7 @@ style_handle_t style_null(struct style_cache *);
 
 style_handle_t style_create(struct style_cache *, int n, struct style_attrib a[]);
 int style_modify(struct style_cache *, style_handle_t s, int n, struct style_attrib a[]);	// data == NULL means remove attrib, return 0 means not changed
-void style_assign(struct style_cache *c, style_handle_t s, style_handle_t v);
+int style_assign(struct style_cache *c, style_handle_t s, style_handle_t v);	// return 1 : dirty 0 : no change
 void style_addref(struct style_cache *c, style_handle_t s);
 void style_release(struct style_cache *c, style_handle_t s);
 

@@ -324,7 +324,7 @@ eval_(struct style_cache *C, style_handle_t h) {
 	s->value = attrib_inherit(C->A, a->value, b->value, s->withmask, C);
 }
 
-void
+int
 style_assign(struct style_cache *C, style_handle_t h, style_handle_t v) {
 	struct style *s = get_style(C, h.idx);
 	assert(is_value(C, s));
@@ -332,10 +332,11 @@ style_assign(struct style_cache *C, style_handle_t h, style_handle_t v) {
 	struct style *vv = get_style(C, v.idx);
 	attrib_t attr = attrib_addref(C->A, vv->value);
 	if (attr.idx == s->value.idx)	// no change
-		return;
+		return 0;
 	attrib_release(C->A, s->value, C);
 	s->value = attr;
 	make_dirty(C, s, h.idx);
+	return 1;
 }
 
 static inline void
