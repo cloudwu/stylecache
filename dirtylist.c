@@ -86,7 +86,7 @@ dirtylist_add(struct dirtylist *D, int a, int b) {
 	}
 	assert(a >= 0 && b >= 0);
 	struct dirtyhead * h = &D->h[a];
-	p->version = h->version;
+	p->version = D->h[b].version;
 	p->b = b;
 	p->next = h->head;
 	h->head = index;
