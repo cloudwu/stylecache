@@ -15,10 +15,9 @@ struct style_attrib {
 };
 
 typedef void * (*style_alloc) (void *ud, void *ptr, size_t osize, size_t nsize);
-typedef void (style_free_iter) (void *ptr, void *ud);
 
 struct style_cache * style_newcache(const unsigned char inherit_mask[128], style_alloc alloc, void *ud);
-void style_deletecache(struct style_cache *, style_free_iter cb, void *ud);
+void style_deletecache(struct style_cache *);
 style_handle_t style_null(struct style_cache *);
 
 style_handle_t style_create(struct style_cache *, int n, struct style_attrib a[]);
@@ -30,7 +29,7 @@ void style_release(struct style_cache *c, style_handle_t s);
 // Do not need to release handle from inherit
 style_handle_t style_inherit(struct style_cache *, style_handle_t child, style_handle_t parent, int with_mask);
 
-void style_flush(struct style_cache *, style_free_iter cb, void *ud);
+void style_flush(struct style_cache *);
 
 void* style_find(struct style_cache *C, style_handle_t h, uint8_t key);
 void* style_index(struct style_cache *, style_handle_t h, int i, uint8_t *key);

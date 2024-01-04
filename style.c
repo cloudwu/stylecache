@@ -11,8 +11,6 @@
 
 #define INVALID_NODE (~0)
 #define ARENA_DEFAULT_SIZE 1024
-#define ATTRIB_CB_NODE 1024
-#define ATTRIB_CB_SIZE 64
 
 #define MAX_KEY 128
 
@@ -28,26 +26,12 @@ struct style {
 	int withmask:1;
 };
 
-struct blob {
-	size_t sz;
-	void *ptr;
-};
-
-struct attrib_cb {
-	char data[ATTRIB_CB_NODE][ATTRIB_CB_SIZE];
-	int small_n;
-	int cap;
-	int n;
-	struct blob *big;
-};
-
 struct style_cache {
 	style_alloc alloc;
 	void * alloc_ud;
 	struct attrib_state *A;
 	struct style *s;
 	struct dirtylist *D;
-	struct attrib_cb free_attrib;
 	style_handle_t empty;
 	int n;
 	int cap;
@@ -82,64 +66,6 @@ style_realloc(struct style_cache *c, void *ptr, size_t osize, size_t nsize) {
 	return c->alloc(c->alloc_ud, ptr, osize, nsize);
 }
 
-static void
-attrib_cb_init(struct attrib_cb *A) {
-	A->small_n = 0;
-	A->cap = 0;
-	A->n = 0;
-	A->big = NULL;
-}
-
-static void
-attrib_cb_deinit(struct attrib_cb *A, struct style_cache *C) {
-	if (A->big) {
-		int i;
-		for (i=0;i<A->n;i++) {
-			style_free(C, A->big[i].ptr, A->big[i].sz);
-		}
-		style_free(C, A->big, A->cap * sizeof(*A->big));
-	}
-}
-
-static void
-attrib_cb_add(struct style_cache *C, void *p, size_t sz) {
-	struct attrib_cb *A = &C->free_attrib;
-	if (sz <= ATTRIB_CB_SIZE && A->small_n < ATTRIB_CB_NODE) {
-		memcpy(A->data[A->small_n], p, sz);
-		++A->small_n;
-	} else {
-		if (A->n <= A->cap) {
-			int newcap = (A->n + 1) * 2;
-			A->big = (struct blob *)style_realloc(C, A->big, newcap * sizeof(struct blob), A->cap * sizeof(struct blob));
-			A->cap = newcap;
-		}
-		struct blob * b = &A->big[A->n++];
-		b->ptr = (char *)style_malloc(C, sz);
-		b->sz = sz;
-		memcpy(b->ptr, p, sz);
-	}
-}
-
-static void
-attrib_cb_iter(struct attrib_cb *A, struct style_cache *C, style_free_iter cb, void *ud) {
-	int i;
-	if (cb == NULL) {
-		for (i=0;i<A->n;i++) {
-			style_free(C, A->big[i].ptr, A->big[i].sz);
-		}
-	} else {
-		for (i=0;i<A->small_n;i++) {
-			cb(A->data[i], ud);
-		}
-		for (i=0;i<A->n;i++) {
-			cb(A->big[i].ptr, ud);
-			style_free(C, A->big[i].ptr, A->big[i].sz);
-		}
-	}
-	A->small_n = 0;
-	A->n = 0;
-}
-
 struct style_cache *
 style_newcache(const unsigned char inherit_mask[128], style_alloc alloc, void *alloc_ud) {
 	if (alloc == NULL) {
@@ -148,7 +74,7 @@ style_newcache(const unsigned char inherit_mask[128], style_alloc alloc, void *a
 	struct style_cache * c = (struct style_cache *)alloc(alloc_ud, NULL, 0, sizeof(*c));
 	c->alloc = alloc;
 	c->alloc_ud = alloc_ud;
-	c->A = attrib_newstate(inherit_mask, c, attrib_cb_add);
+	c->A = attrib_newstate(inherit_mask, c);
 	c->s = (struct style *)style_malloc(c, ARENA_DEFAULT_SIZE * sizeof(struct style));
 	c->D = dirtylist_create(c);
 	c->n = 0;
@@ -157,20 +83,17 @@ style_newcache(const unsigned char inherit_mask[128], style_alloc alloc, void *a
 	c->live = -1;
 	c->dead = -1;
 	c->empty = style_create(c, 0, NULL);
-	attrib_cb_init(&c->free_attrib);
 	return c;
 }
 
 void
-style_deletecache(struct style_cache *c, style_free_iter cb, void *ud) {
+style_deletecache(struct style_cache *c) {
 	if (c == NULL)
 		return;
 	style_free(c, c->s, c->cap * sizeof(struct style));
 	attrib_close(c->A, c);
 	dirtylist_release(c->D);
 	style_free(c, c, sizeof(*c));
-	attrib_cb_iter(&c->free_attrib, c, cb, ud);
-	attrib_cb_deinit(&c->free_attrib, c);
 }
 
 style_handle_t
@@ -527,7 +450,7 @@ style_index(struct style_cache *C, style_handle_t h, int i, uint8_t *key) {
 }
 
 void
-style_flush(struct style_cache *C, style_free_iter cb, void *ud) {
+style_flush(struct style_cache *C) {
 	int dead = C->dead;
 	if (dead < 0)
 		return;
@@ -562,12 +485,10 @@ style_flush(struct style_cache *C, style_free_iter cb, void *ud) {
 			s->next = C->freelist;
 			C->freelist = C->dead;
 			C->dead = -1;
-			break;
+			return;
 		}
 		dead = s->next;
 	}
-
-	attrib_cb_iter(&C->free_attrib, C, cb, ud);
 }
 
 #ifdef STYLE_TEST_MAIN
@@ -609,11 +530,6 @@ print_handle(struct style_cache *C, style_handle_t handle) {
 	}
 }
 
-static void
-free_attrib(void *ptr, void *ud) {
-	printf("FREE %s\n", (const char *)ptr);
-}
-
 int
 main() {
 	unsigned char inherit_mask[MAX_KEY] = { 0 };
@@ -644,7 +560,7 @@ main() {
 
 	print_handle(C, h3);
 
-	style_flush(C, free_attrib, NULL);
+	style_flush(C);
 
 	// Modify
 
@@ -671,9 +587,9 @@ main() {
 
 	style_release(C, h3);
 
-	style_flush(C, free_attrib, NULL);
+	style_flush(C);
 
-	style_deletecache(C, free_attrib, NULL);
+	style_deletecache(C);
 
 	assert(info.sz == 0);
 

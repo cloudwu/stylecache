@@ -66,6 +66,6 @@ main() {
 
 	intern_cache_deinit(C, &cache);
 
-	style_deletecache(C, NULL, NULL);
+	style_deletecache(C);
 	return 0;
 }

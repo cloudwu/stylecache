@@ -8,9 +8,7 @@
 struct attrib_state;
 typedef struct { int idx; } attrib_t;
 
-typedef void (*attrib_blob_free)(struct style_cache *C, void *p, size_t sz);
-
-struct attrib_state * attrib_newstate(const unsigned char inherit_mask[128], struct style_cache *C, attrib_blob_free cb);
+struct attrib_state * attrib_newstate(const unsigned char inherit_mask[128], struct style_cache *C);
 void attrib_close(struct attrib_state *, struct style_cache *C);
 
 int attrib_entryid(struct attrib_state *, int key, void *ptr, size_t sz, struct style_cache *C);

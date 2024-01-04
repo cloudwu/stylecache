@@ -95,7 +95,6 @@ struct attrib_state {
 	struct inherit_cache icache;
 	struct delay_removed kv_removed;
 	struct delay_removed tuple_removed;
-	attrib_blob_free free_cb;
 	unsigned char inherit_mask[128];
 	VERIFY_ATTRIB
 };
@@ -267,23 +266,18 @@ arena_init(struct attrib_arena *arena, struct style_cache *C) {
 }
 
 static inline void
-free_blob(struct attrib_kv *kv, struct style_cache *C, attrib_blob_free cb) {
+free_blob(struct attrib_kv *kv, struct style_cache *C) {
 	if (kv->blob) {
-		if (cb) {
-			cb(C, kv->v.ptr->data, kv->v.ptr->sz);
-		}
 		style_free(C, kv->v.ptr, kv->v.ptr->sz + sizeof(struct attrib_blob) - 1);
 		kv->blob = 0;
-	} else if (cb) {
-		cb(C, kv->v.buffer, EMBED_VALUE_SIZE);
 	}
 }
 
 static void
-arena_deinit(struct attrib_arena *arena, struct style_cache *C, attrib_blob_free cb) {
+arena_deinit(struct attrib_arena *arena, struct style_cache *C) {
 	int i;
 	for (i=0;i<arena->n;i++) {
-		free_blob(&arena->e[i], C, cb);
+		free_blob(&arena->e[i], C);
 	}
 	style_free(C, arena->e, arena->cap * sizeof(struct attrib_kv));
 }
@@ -330,7 +324,7 @@ arena_create(struct attrib_arena *arena, int key, void *value, size_t sz, uint32
 }
 
 struct attrib_state *
-attrib_newstate(const unsigned char inherit_mask[128], struct style_cache *C, attrib_blob_free cb) {
+attrib_newstate(const unsigned char inherit_mask[128], struct style_cache *C) {
 	struct attrib_state *A = (struct attrib_state *)style_malloc(C, sizeof(*A));
 	arena_init(&A->arena, C);
 	tuple_init(&A->tuple, C);
@@ -347,14 +341,12 @@ attrib_newstate(const unsigned char inherit_mask[128], struct style_cache *C, at
 		memcpy(A->inherit_mask, inherit_mask, sizeof(A->inherit_mask));
 	}
 
-	A->free_cb = cb;
-
 	return A;
 }
 
 void
 attrib_close(struct attrib_state *A, struct style_cache *C) {
-	arena_deinit(&A->arena, C, A->free_cb);
+	arena_deinit(&A->arena, C);
 	tuple_deinit(&A->tuple, C);
 	inherit_cache_deinit(C, &A->icache);
 	intern_cache_deinit(C, &A->arena_i);
@@ -411,7 +403,7 @@ release_kv(struct attrib_state *A, int removed_index, struct style_cache *C) {
 	struct attrib_kv * kv = &arena->e[removed_index];
 	if (--kv->refcount == 0) {
 		intern_cache_remove(&A->arena_i, removed_index,  ATTRIB_KV_HASH(A));
-		free_blob(kv, C, A->free_cb);
+		free_blob(kv, C);
 		kv->v.next = arena->freelist;
 		arena->freelist = removed_index;
 	}
@@ -782,7 +774,7 @@ dump_attrib(struct attrib_state *A, attrib_t handle) {
 int
 main() {
 	struct style_cache *C = style_newcache(NULL, NULL, NULL);
-	struct attrib_state *A = attrib_newstate(NULL, C, NULL);
+	struct attrib_state *A = attrib_newstate(NULL, C);
 	int id1 = KV(A, 1, "hello");
 	int id2 = KV(A, 2, "hello world");
 	int id3 = KV(A, 2, "hello");
@@ -824,7 +816,7 @@ main() {
 
 	attrib_close(A, C);
 
-	style_deletecache(C, NULL, NULL);
+	style_deletecache(C);
 	return 0;
 }
 
