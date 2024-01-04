@@ -622,7 +622,7 @@ attrib_find(struct attrib_state *A, attrib_t handle, uint8_t key) {
 }
 
 void*
-attrib_index(struct attrib_state *A, attrib_t handle, int i, uint8_t *key) {
+attrib_index(struct attrib_state *A, attrib_t handle, int i, uint8_t *key, size_t *sz) {
 	int index = verify_attribid(A, handle.idx);
 	assert(index >= 0 && index < A->tuple.n);
 	struct attrib_array * a = A->tuple.s[index].a;
@@ -630,6 +630,9 @@ attrib_index(struct attrib_state *A, attrib_t handle, int i, uint8_t *key) {
 		return NULL;
 	struct attrib_kv *kv = get_kv(A, a, i);
 	*key = kv->k;
+	if (sz) {
+		*sz = kv->blob ? kv->v.ptr->sz : EMBED_VALUE_SIZE;
+	}
 	return kv->blob ? kv->v.ptr->data : kv->v.buffer;
 }
 
@@ -764,7 +767,7 @@ dump_attrib(struct attrib_state *A, attrib_t handle) {
 	printf("[ATTRIB %x (%d)]\n", handle.idx, attrib_refcount(A, handle));
 	for (i=0;;i++) {
 		uint8_t key;
-		void *ptr = attrib_index(A, handle, i, &key);
+		void *ptr = attrib_index(A, handle, i, &key, NULL);
 		if (ptr == NULL)
 			break;
 		printf("\t[%d] = %s\n", key, (const char *)ptr);

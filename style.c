@@ -386,12 +386,12 @@ get_value(struct style_cache *C, style_handle_t h) {
 }
 
 void*
-style_find(struct style_cache *C, style_handle_t h, uint8_t key) {
+style_find(struct style_cache *C, style_handle_t h, uint8_t key, size_t *sz) {
 	attrib_t a = get_value(C, h);
 	int index = attrib_find(C->A, a, key);
 	if (index < 0)
 		return NULL;
-	return attrib_index(C->A, a, index, &key);
+	return attrib_index(C->A, a, index, &key, sz);
 }
 
 static void
@@ -408,7 +408,7 @@ dump_key(int indent, struct style_cache *C, int style_id, uint8_t key, char fmt)
 		if (index < 0) {
 			printf("%d\n", a.idx);
 		} else {
-			void *p = attrib_index(C->A, a, index, &key);
+			void *p = attrib_index(C->A, a, index, &key, NULL);
 			printf("%d : ", a.idx);
 			switch (fmt) {
 			case 's':
@@ -444,9 +444,9 @@ style_dump_key(struct style_cache *C, style_handle_t h, uint8_t key, char fmt) {
 }
 
 void*
-style_index(struct style_cache *C, style_handle_t h, int i, uint8_t *key) {
+style_index(struct style_cache *C, style_handle_t h, int i, uint8_t *key, size_t *sz) {
 	attrib_t a = get_value(C, h);
-	return attrib_index(C->A, a, i, key);
+	return attrib_index(C->A, a, i, key, sz);
 }
 
 void
@@ -520,7 +520,7 @@ print_handle(struct style_cache *C, style_handle_t handle) {
 	int i;
 	for (i=0;;i++) {
 		uint8_t key;
-		void* v = style_index(C, handle, i, &key);
+		void* v = style_index(C, handle, i, &key, NULL);
 		if (v) {
 			printf("\tKey = %d , Value = %s\n", key, (const char *)v);
 		}
