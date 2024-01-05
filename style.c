@@ -404,7 +404,10 @@ get_value(struct style_cache *C, style_handle_t h) {
 int
 style_find(struct style_cache *C, style_handle_t h, uint8_t key) {
 	attrib_t a = get_value(C, h);
-	return attrib_find(C->A, a, key);
+	int index = attrib_find(C->A, a, key);
+	if (index < 0)
+		return -1;
+	return attrib_index(C->A, a, index);
 }
 
 static void

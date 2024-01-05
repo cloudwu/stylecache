@@ -610,7 +610,7 @@ attrib_find(struct attrib_state *A, attrib_t handle, uint8_t key) {
 		int mid = (begin + end) / 2;
 		struct attrib_kv *kv = get_kv(A, a, mid);
 		if (kv->k == key) {
-			return a->data[mid];
+			return mid;
 		} else if (kv->k < key) {
 			begin = mid + 1;
 		} else {
@@ -801,6 +801,8 @@ main() {
 
 	int tmp[128];
 	int n = attrib_get(A, handle, tmp);
+	int key_index = attrib_find(A, handle, 1);
+	tmp[key_index] = KV(A, 1, "world");
 
 	attrib_t handle2 = attrib_create(A, n, tmp, C);
 	attrib_t handle3 = attrib_create(A, n, tmp, C);
