@@ -25,7 +25,7 @@ void style_attrib_addref(struct style_cache *, int id);
 void style_attrib_release(struct style_cache *, int id);
 
 style_handle_t style_create(struct style_cache *, int n, const int a[]);
-int style_modify(struct style_cache *, style_handle_t s, int n, int patch[], int removed_n, const uint8_t removed_key[]);	// return 0 means not changed
+int style_modify(struct style_cache *, style_handle_t s, int n, int patch[], int removed_n, int removed_key[]);	// return 0 means not changed
 int style_assign(struct style_cache *c, style_handle_t s, style_handle_t v);	// return 1 : dirty 0 : no change
 int style_compare(struct style_cache *c, style_handle_t s, style_handle_t v);	// return 1 : change 0 : no change
 void style_addref(struct style_cache *c, style_handle_t s);

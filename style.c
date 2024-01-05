@@ -240,7 +240,7 @@ is_combination(struct style_cache *C, struct style *s) {
 }
 
 int
-style_modify(struct style_cache *C, style_handle_t h, int patch_n, int patch[], int removed_n, const uint8_t removed_key[]) {
+style_modify(struct style_cache *C, style_handle_t h, int patch_n, int patch[], int removed_n, int removed_key[]) {
 	struct attrib_state *A = C->A;
 	struct style *s = get_style(C, h.idx);
 	assert(is_value(C, s));
@@ -274,6 +274,9 @@ style_modify(struct style_cache *C, style_handle_t h, int patch_n, int patch[], 
 		int index = attrib_find(A, s->value, removed_key[i]);
 		if (index >= 0) {
 			tmp[index] = -1;
+			removed_key[i] = 1;
+		} else {
+			removed_key[i] = 0;
 		}
 	}
 	int i2 = 0;
@@ -593,7 +596,7 @@ main() {
 	};
 
 	int patch[] = { style_attrib_id(C, &kv) };
-	uint8_t removed[] = { 1 };
+	int removed[] = { 1 };
 
 	printf("H1 = %d, h3 = %d\n", h1.idx, h3.idx);
 
