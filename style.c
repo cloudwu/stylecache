@@ -325,18 +325,26 @@ eval_(struct style_cache *C, style_handle_t h) {
 }
 
 int
-style_assign(struct style_cache *C, style_handle_t h, style_handle_t v) {
+style_compare(struct style_cache *C, style_handle_t h, style_handle_t v) {
 	struct style *s = get_style(C, h.idx);
 	assert(is_value(C, s));
 	eval_(C, v);
 	struct style *vv = get_style(C, v.idx);
-	attrib_t attr = attrib_addref(C->A, vv->value);
-	if (attr.idx == s->value.idx)	// no change
-		return 0;
-	attrib_release(C->A, s->value, C);
-	s->value = attr;
-	make_dirty(C, s, h.idx);
-	return 1;
+	return vv->value.idx != s->value.idx;
+}
+
+int
+style_assign(struct style_cache *C, style_handle_t h, style_handle_t v) {
+	if (style_compare(C, h, v)) {
+		struct style *vv = get_style(C, v.idx);
+		attrib_t attr = attrib_addref(C->A, vv->value);
+		struct style *s = get_style(C, h.idx);
+		attrib_release(C->A, s->value, C);
+		s->value = attr;
+		make_dirty(C, s, h.idx);
+		return 1;
+	}
+	return 0;
 }
 
 static inline void
