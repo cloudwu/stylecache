@@ -268,17 +268,18 @@ style_modify(struct style_cache *C, style_handle_t h, int patch_n, int patch[], 
 			}
 		}
 	}
-	if (!change && removed_n == 0)
-		return 0;
 	for (i=0;i<removed_n;i++) {
 		int index = attrib_find(A, s->value, removed_key[i]);
 		if (index >= 0) {
 			tmp[index] = -1;
 			removed_key[i] = 1;
+			change = 1;
 		} else {
 			removed_key[i] = 0;
 		}
 	}
+	if (!change)
+		return 0;
 	int i2 = 0;
 	int n2 = n;
 	for (i=0;i<n && removed_n > 0;i++) {
