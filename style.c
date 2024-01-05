@@ -145,15 +145,29 @@ remove_from(struct style_cache *C, int id, int *node) {
 	}
 }
 
+int
+style_attrib_id(struct style_cache *C, const struct style_attrib *attrib) {
+	return attrib_entryid(C->A, attrib->key, attrib->data, attrib->sz, C);
+}
+
+void
+style_attrib_value(struct style_cache *C, int id, struct style_attrib *attrib) {
+	attrib->data = attrib_entry_get(C->A, id, &attrib->key, &attrib->sz);
+}
+
+void
+style_attrib_addref(struct style_cache *C, int id) {
+	attrib_entry_addref(C->A, id);
+}
+
+void
+style_attrib_release(struct style_cache *C, int id) {
+	attrib_entry_release(C->A, id, C);
+}
+
 style_handle_t
-style_create(struct style_cache *C, int n, struct style_attrib a[]) {
+style_create(struct style_cache *C, int n, const int tmp[]) {
 	struct attrib_state *A = C->A;
-	assert(n <= MAX_KEY);
-	int tmp[MAX_KEY];
-	int i;
-	for (i=0;i<n;i++) {
-		tmp[i] = attrib_entryid(A, a[i].key, a[i].data, a[i].sz, C);
-	}
 	attrib_t attr = attrib_create(A, n, tmp, C);
 	int id = alloc_style(C);
 	struct style *s = &C->s[id];
@@ -226,54 +240,45 @@ is_combination(struct style_cache *C, struct style *s) {
 }
 
 int
-style_modify(struct style_cache *C, style_handle_t h, int patch_n, struct style_attrib patch[]) {
+style_modify(struct style_cache *C, style_handle_t h, int patch_n, int patch[], int removed_n, const uint8_t removed_key[]) {
 	struct attrib_state *A = C->A;
 	struct style *s = get_style(C, h.idx);
 	assert(is_value(C, s));
 	int tmp[MAX_KEY];
 	int n = attrib_get(A, s->value, tmp);
 	int i;
-	int removed = 0;
 	int change = 0;
 	for (i=0;i<patch_n;i++) {
-		int index = attrib_find(A, s->value, patch[i].key);
+		struct style_attrib attr;
+		style_attrib_value(C, patch[i], &attr);
+		int index = attrib_find(A, s->value, attr.key);
 		if (index < 0) {
-			if (patch[i].data) {
-				// new
-				int kv = attrib_entryid(A, patch[i].key, patch[i].data, patch[i].sz, C);
-				tmp[n++] = kv;
-				assert(n <= MAX_KEY);
-				patch[i].change = 1;
-				change = 1;
-			} else {
-				patch[i].change = 0;
-			}
+			// new
+			tmp[n++] = patch[i];
+			assert(n <= MAX_KEY);
+			patch[i] = 1;
+			change = 1;
 		} else {
-			if (patch[i].data) {
-				// replace
-				int kv = attrib_entryid(A, patch[i].key, patch[i].data, patch[i].sz, C);
-				if (tmp[index] != kv) {
-					change = 1;
-					patch[i].change = 1;
-					tmp[index] = kv;
-				} else {
-					patch[i].change = 0;
-				}
-			} else {
-				// remove
-				++removed;
-				tmp[index] = -1;
-				patch[i].change = 1;
+			if (tmp[index] != patch[i]) {
 				change = 1;
+				tmp[index] = patch[i];
+				patch[i] = 1;
+			} else {
+				patch[i] = 0;
 			}
 		}
 	}
-	if (!change)
+	if (!change && removed_n > 0)
 		return 0;
-
+	for (i=0;i<removed_n;i++) {
+		int index = attrib_find(A, s->value, removed_key[i]);
+		if (index >= 0) {
+			tmp[index] = -1;
+		}
+	}
 	int i2 = 0;
 	int n2 = n;
-	for (i=0;i<n && removed;i++) {
+	for (i=0;i<n && removed_n > 0;i++) {
 		if (tmp[i] >= 0) {
 			tmp[i2] = tmp[i];
 			++i2;
@@ -393,13 +398,10 @@ get_value(struct style_cache *C, style_handle_t h) {
 	return s->value;
 }
 
-void*
-style_find(struct style_cache *C, style_handle_t h, uint8_t key, size_t *sz) {
+int
+style_find(struct style_cache *C, style_handle_t h, uint8_t key) {
 	attrib_t a = get_value(C, h);
-	int index = attrib_find(C->A, a, key);
-	if (index < 0)
-		return NULL;
-	return attrib_index(C->A, a, index, &key, sz);
+	return attrib_find(C->A, a, key);
 }
 
 static void
@@ -416,7 +418,10 @@ dump_key(int indent, struct style_cache *C, int style_id, uint8_t key, char fmt)
 		if (index < 0) {
 			printf("%d\n", a.idx);
 		} else {
-			void *p = attrib_index(C->A, a, index, &key, NULL);
+			int id = attrib_index(C->A, a, index);
+			struct style_attrib attr;
+			style_attrib_value(C, id, &attr);
+			void *p = attr.data;
 			printf("%d : ", a.idx);
 			switch (fmt) {
 			case 's':
@@ -451,10 +456,10 @@ style_dump_key(struct style_cache *C, style_handle_t h, uint8_t key, char fmt) {
 	dump_key(0, C, h.idx, key, fmt);
 }
 
-void*
-style_index(struct style_cache *C, style_handle_t h, int i, uint8_t *key, size_t *sz) {
+int
+style_index(struct style_cache *C, style_handle_t h, int i) {
 	attrib_t a = get_value(C, h);
-	return attrib_index(C->A, a, i, key, sz);
+	return attrib_index(C->A, a, i);
 }
 
 void
@@ -527,10 +532,11 @@ print_handle(struct style_cache *C, style_handle_t handle) {
 
 	int i;
 	for (i=0;;i++) {
-		uint8_t key;
-		void* v = style_index(C, handle, i, &key, NULL);
-		if (v) {
-			printf("\tKey = %d , Value = %s\n", key, (const char *)v);
+		int id = style_index(C, handle, i);
+		if (id >= 0) {
+			struct style_attrib attr;
+			style_attrib_value(C, id, &attr);
+			printf("\tKey = %d , Value = %s\n", attr.key, (const char *)attr.data);
 		}
 		else {
 			break;
@@ -549,14 +555,24 @@ main() {
 		{ STR("world") ,2 },
 	};
 
-	style_handle_t h1 = style_create(C, sizeof(a)/sizeof(a[0]), a);
+	int id_a[] = {
+		style_attrib_id(C, &a[0]),
+		style_attrib_id(C, &a[1]),
+	};
+
+	style_handle_t h1 = style_create(C, sizeof(id_a)/sizeof(id_a[0]), id_a);
 
 	struct style_attrib b[] = {
 		{ STR("hello world"), 1 },
 		{ STR("world"), 2 },
 	};
 
-	style_handle_t h2 = style_create(C, sizeof(b)/sizeof(b[0]), b);
+	int id_b[] = {
+		style_attrib_id(C, &b[0]),
+		style_attrib_id(C, &b[1]),
+	};
+
+	style_handle_t h2 = style_create(C, sizeof(b)/sizeof(b[0]), id_b);
 
 	printf("h1 = %d, h2 = %d\n", h1.idx, h2.idx);
 
@@ -572,14 +588,16 @@ main() {
 
 	// Modify
 
-	struct style_attrib patch[] = {
-		{ NULL, 1 },	// remove 1
-		{ STR("WORLD"), 2 },
+	struct style_attrib kv = {
+		STR("WORLD"), 2
 	};
+
+	int patch[] = { style_attrib_id(C, &kv) };
+	uint8_t removed[] = { 1 };
 
 	printf("H1 = %d, h3 = %d\n", h1.idx, h3.idx);
 
-	style_modify(C, h1, sizeof(patch)/sizeof(patch[0]), patch);
+	style_modify(C, h1, 1, patch, 1, removed);
 
 	style_dump_key(C, h3, 1, 's');
 

@@ -409,8 +409,8 @@ release_kv(struct attrib_state *A, int removed_index, struct style_cache *C) {
 	}
 }
 
-static int
-arena_release(struct attrib_state *A, int id, struct style_cache *C) {
+void
+attrib_entry_release(struct attrib_state *A, int id, struct style_cache *C) {
 	struct attrib_arena *arena = &(A->arena);
 	assert(id >= 0 && id < arena->n);
 	struct attrib_kv * kv = &arena->e[id];
@@ -423,16 +423,15 @@ arena_release(struct attrib_state *A, int id, struct style_cache *C) {
 			release_kv(A, removed_index, C);
 		}
 	}
-	return c;
 }
 
-static int
-arena_addref(struct attrib_arena *arena, int id) {
+void
+attrib_entry_addref(struct attrib_state *A, int id) {
+	struct attrib_arena *arena = &(A->arena);
 	assert(id >= 0 && id < arena->n);
 	struct attrib_kv * kv = &arena->e[id];
 	++kv->refcount;
 	assert(kv->refcount != 0);
-	return kv->refcount;
 }
 
 // add index(kv) into buffer[n]
@@ -535,7 +534,7 @@ attrib_create(struct attrib_state *A, int n, const int e[], struct style_cache *
 	struct attrib_array *a = create_attrib_array(n, hash, C);
 	for (i=0;i<n;i++) {
 		a->data[i] = tmp[i];
-		arena_addref(&A->arena, tmp[i]);
+		attrib_entry_addref(A, tmp[i]);
 	}
 	int id = tuple_new(&A->tuple, a, C);
 
@@ -554,7 +553,7 @@ delete_tuple(struct attrib_state *A, int index, struct style_cache *C) {
 		return 0;
 	int i;
 	for (i=0;i<a->n;i++) {
-		arena_release(A, a->data[i], C);
+		attrib_entry_release(A, a->data[i], C);
 	}
 	intern_cache_remove(&A->tuple_i, index, TUPLE_HASH(A));
 	tuple_delete(&A->tuple, id, C);
@@ -621,19 +620,25 @@ attrib_find(struct attrib_state *A, attrib_t handle, uint8_t key) {
 	return -1;
 }
 
+
 void*
-attrib_index(struct attrib_state *A, attrib_t handle, int i, uint8_t *key, size_t *sz) {
-	int index = verify_attribid(A, handle.idx);
-	assert(index >= 0 && index < A->tuple.n);
-	struct attrib_array * a = A->tuple.s[index].a;
-	if (i < 0 || i >= a->n)
-		return NULL;
-	struct attrib_kv *kv = get_kv(A, a, i);
+attrib_entry_get(struct attrib_state *A, int index, uint8_t *key, size_t *sz) {
+	struct attrib_kv *kv = &A->arena.e[index];
 	*key = kv->k;
 	if (sz) {
 		*sz = kv->blob ? kv->v.ptr->sz : EMBED_VALUE_SIZE;
 	}
 	return kv->blob ? kv->v.ptr->data : kv->v.buffer;
+}
+
+int
+attrib_index(struct attrib_state *A, attrib_t handle, int i) {
+	int index = verify_attribid(A, handle.idx);
+	assert(index >= 0 && index < A->tuple.n);
+	struct attrib_array * a = A->tuple.s[index].a;
+	if (i < 0 || i >= a->n)
+		return -1;
+	return a->data[i];
 }
 
 static attrib_t
@@ -766,10 +771,12 @@ dump_attrib(struct attrib_state *A, attrib_t handle) {
 	int i;
 	printf("[ATTRIB %x (%d)]\n", handle.idx, attrib_refcount(A, handle));
 	for (i=0;;i++) {
-		uint8_t key;
-		void *ptr = attrib_index(A, handle, i, &key, NULL);
-		if (ptr == NULL)
+		int id = attrib_index(A, handle, i);
+		if (id < 0)
 			break;
+		uint8_t key;
+		size_t sz;
+		void* ptr = attrib_entry_get(A, id, &key, &sz);
 		printf("\t[%d] = %s\n", key, (const char *)ptr);
 	}
 }
